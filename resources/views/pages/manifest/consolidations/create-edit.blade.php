@@ -1879,31 +1879,13 @@
                 }, 300);
                 
                 break;
-            }
-            case "tab-bilcost":{
-              timeout = setTimeout(() => {
-                tableShipmentsBilling($('#JR_JH').val());
-                tableShipmentsCost($('#JR_JH').val());
-                getTblCharges();
-              }, 300);
-              
-              break;
-            }
+            }            
             case "tab-summary":{
               timeout = setTimeout(() => {
                 getTblResSummary();
                 getTblResLogs();
               }, 300);
               
-              break;
-            }
-            case "tab-kirim":{
-              // var tableKirim = $('#tblKirim').DataTable({
-              //               paging: false,
-              //               ordering: false,
-              //               scrollY: '50vh',
-              //               scrollCollapse: true,
-              //             });
               break;
             }
         }
@@ -2426,28 +2408,7 @@
       });
       $(document).on('change', '#JNS_AJU', function(){
         var ref = $(this).find(':selected').attr('data-ref');
-        // var val = $(this).find(':selected').val();
-        // var kddoc = 0;
-        // switch (val) {
-        //   case "1":
-        //     kddoc = "43";
-        //     break;
-        //   case "2":
-        //     kddoc = "43";
-        //     break;
-        //   case "3":
-        //     kddoc = "43";
-        //     break;
-        //   case "4":
-        //     kddoc = "1";
-        //     break;
-        //   case "5":
-        //     kddoc = "2";
-        //     break;
-        //   default:
-        //     kddoc = val;
-        //     break;
-        // }
+        
         $('#KD_DOC').val(ref).trigger('change');
       });
       $(document).on('click', '.codes', function(){
