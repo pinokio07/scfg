@@ -1,0 +1,1 @@
+<a href="{{$link}}" class="btn btn-xs elevation-2 btn-warning"><i class="fas fa-edit"></i> Edit</a>

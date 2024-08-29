@@ -1,0 +1,1 @@
+<a href="{{$link}}" class="btn btn-success btn-sm elevation-2 mb-2"><i class="fas fa-download"></i> Download</a>

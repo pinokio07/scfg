@@ -1,0 +1,1 @@
+@include('pages.manifest.reference.logs-bc')

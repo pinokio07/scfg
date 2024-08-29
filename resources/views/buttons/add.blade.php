@@ -1,0 +1,1 @@
+<a href="{{$link}}" class="btn btn-info btn-sm elevation-2 mb-2"><i class="fas fa-plus"></i> Add New</a>

@@ -1,0 +1,1 @@
+<a data-href="{{$link}}" class="btn btn-xs elevation-2 btn-danger delete"><i class="fas fa-trash"></i> Delete</a>
