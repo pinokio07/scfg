@@ -44,6 +44,25 @@ class AuthController extends Controller
           //Update timestamps
           $user->touch();
 
+          if($user->branches->isEmpty()){
+            Auth::logout();
+  
+            return redirect('/')->with('gagal', 'You dont have a branch.');
+          }
+
+          //Check Branch
+          if( $user->branches->count() > 1
+              // && !$user->hasRole('super-admin')
+          ){
+            return redirect('/active-company');
+          // } elseif(!$user->hasRole('super-admin')) {
+          } else {
+            $branch = $user->branches->first()->id;
+            $user->branches()->updateExistingPivot($branch, ['active' => true]);
+            session(['brid' => $branch]);
+            // return redirect()->intended('/dashboard');
+          }   
+
           DB::beginTransaction();
 
           try {

@@ -1,10 +1,11 @@
 @extends('layouts.master')
 @section('title') Shipments Status @endsection
-@section('page_name') Shipments Status @endsection
+@section('page_name') Shipments Status || ExRate {{ $exRate->RE_SellRate ?? 0 }} @endsection
 
 @section('header')
   <!-- Ionicons -->
   <link rel="stylesheet" href="https://code.ionicframework.com/ionicons/2.0.1/css/ionicons.min.css">
+  <script src="https://cdn.datatables.net/plug-ins/2.1.2/dataRender/datetime.js" charset="utf8"></script>
   <style>
     .informasi:hover{
       color: blue !important;
@@ -18,183 +19,270 @@
   <div class="container-fluid">
     <!-- Small boxes (Stat box) -->
     <div class="row">
-      <div class="col-lg-3 col-6">
+      <!-- PLP Status -->
+      <div class="col-lg-5">
         <!-- small box -->
-        <div class="small-box bg-info">
+        <div class="small-box bg-warning">
           <div class="inner">
-            <h3>{{ number_format($pendingPlp, 0, ',', '.') }}</h3>
+            <h5>Pending Gate In (Master)</h5>
 
-            <p>Pending PLP</p>
-          </div>
-          <div class="icon">
-            <i class="ion ion-document"></i>
-          </div>
-          <a href="#" 
-             data-jenis="pending-plp"
-             data-judul="Pending PLP"
-             class="small-box-footer informasi">
-             More info 
-             <i class="fas fa-arrow-circle-right"></i>
-          </a>
-        </div>
-      </div>
-      <!-- ./col -->
-      <div class="col-lg-3 col-6">
-        <!-- small box -->
-        <div class="small-box bg-success">
-          <div class="inner">
-            <h3>
-              {{ number_format($pendingInWoPlp, 0, ',', '.') }} <sup><small>No PLP</small></sup>
-              /
-               {{ number_format($pendingInPlp, 0, ',', '.') }} <sup><small>Has PLP</small></sup>
-            </h3>
-            <p>Pending Gate In</p>
+            <div class="row">
+              <div class="col-4 text-center">
+                <h3 id="info-pendingInWoPlp">0</h3>
+              </div>
+              <div class="col-4 text-center">
+                <h3 id="info-pendingPlp">0</h3>
+              </div>
+              <div class="col-4 text-center">
+                <h3 id="info-pendingInPlp">0</h3>
+              </div>
+            </div>
           </div>
           <div class="icon">
             <i class="ion ion-log-in"></i>
           </div>
           <div class="small-box-footer">
             <div class="row">
-              <div class="col-6">
+              <div class="col-4">
                 <a href="#"
-                   data-jenis="pending-in-wo-plp"
-                   data-judul="Pending Gate In Without PLP" 
-                   class="text-white btn-block informasi">
+                    data-jenis="pending-in-wo-plp"
+                    data-judul="Pending Gate In Without PLP" 
+                    class="text-white btn-block informasi">
                   Without PLP <i class="fas fa-arrow-circle-right"></i>
                 </a>
               </div>
-              <div class="col-6">
+              <div class="col-4">
                 <a href="#" 
-                   data-jenis="pending-in-plp"
-                   data-judul="Pending Gate In With PLP"
-                   class="text-white btn-block informasi">
-                  With PLP <i class="fas fa-arrow-circle-right"></i>
+                    data-jenis="pending-plp"
+                    data-judul="Pending PLP"
+                    class="text-white btn-block informasi">
+                    Waiting Approval PLP 
+                    <i class="fas fa-arrow-circle-right"></i>
+                </a>
+              </div>
+              <div class="col-4">
+                <a href="#" 
+                    data-jenis="pending-in-plp"
+                    data-judul="Pending Gate In Approved PLP"
+                    class="text-white btn-block informasi">
+                  Approved <i class="fas fa-arrow-circle-right"></i>
                 </a>
               </div>
             </div>
-          </div>
+          </div>          
         </div>
       </div>
+      <!-- Inventory -->
       <!-- ./col -->
-      <div class="col-lg-3 col-6">
+      <div class="col-lg-2">
         <!-- small box -->
-        <div class="small-box bg-warning">
+        <div class="small-box bg-success">
           <div class="inner">
-            <h3>
-              {{ number_format($pendingSppb, 0, ',', '.') }} <sup><small>Pending SPPB</small></sup>
-              /
-               {{ number_format($sppb, 0, ',', '.') }} <sup><small>SPPB</small></sup>
-            </h3>
-            <p>Cargo On Hand</p>
-          </div>          
+            <h5>Current Inventory</h5>
+            <h3 id="info-current" class="text-center">0</h3>
+          </div>
           <div class="icon">
             <i class="ion ion-clipboard"></i>
           </div>
-          <div class="small-box-footer">
-            <div class="row">
-              <div class="col-6">
-                <a href="#"
-                   data-jenis="pending-sppb"
-                   data-judul="Pending SPPB" 
-                   class="text-white btn-block informasi">
-                  Pending SPPB <i class="fas fa-arrow-circle-right"></i>
-                </a>
-              </div>
-              <div class="col-6">
-                <a href="#" 
-                   data-jenis="sppb"
-                   data-judul="SPPB"
-                   class="text-white btn-block informasi">
-                  SPPB <i class="fas fa-arrow-circle-right"></i>
-                </a>
-              </div>
-            </div>
-          </div>
+          <a href="#"
+             data-jenis="current-now"
+             data-judul="Current Inventory"
+             class="small-box-footer informasi">
+            More Info
+            <i class="fas fa-arrow-circle-right"></i>
+          </a>
         </div>
       </div>
+      <!-- Abandoned -->
       <!-- ./col -->
-      <div class="col-lg-3 col-6">
+      <div class="col-lg-2">
         <!-- small box -->
         <div class="small-box bg-danger">
           <div class="inner">
-            <h3>
-              {{ number_format($pendingTmsIn, 0, ',', '.') }} <sup><small>IN</small></sup>
-              /
-               {{ number_format($pendingTmsOut, 0, ',', '.') }} <sup><small>OUT</small></sup>
-            </h3>
+            <h5>Abandoned</h5>
+            <h3 id="info-abandon" class="text-center">0</h3>
+          </div>          
+          <div class="icon">
+            <i class="ion ion-archive"></i>
+          </div>
+          <a href="#"
+             data-jenis="abandon"
+             data-judul="Abandoned"
+             class="small-box-footer informasi">
+            More Info
+            <i class="fas fa-arrow-circle-right"></i>
+          </a>
+        </div>
+      </div>
+      <!-- ./col -->
+      <!-- Buttons -->
+      <div class="col-lg-3">
+        <a href="{{ route('manifest.batch-tracking') }}"
+           class="btn btn-sm btn-primary btn-block elevation-2">
+           <i class="fas fa-search"></i> Batch Tracking</a>
+        <button id="advSearch"
+           class="btn btn-sm btn-info btn-block elevation-2">
+           <i class="fas fa-search"></i> Advance Search</button>
+        @can('multi_tenant')
+        <form action="{{ url()->current() }}" method="get">
+          <input type="hidden" name="aws" value="{{ \Str::random(10) }}">
+          <input type="hidden" name="idx" value="{{ \Str::random(15) }}">
+          <input type="hidden" name="wkc" value="{{ \Str::random(20) }}">
+          <div class="form-group elevation-2 mt-2">
+            <select name="idm" id="idm"
+                    class="select2bs4"
+                    style="width: 100%;"
+                    onchange="getCount();">
+                <option value="all" @selected(Request::get('idm') === 'all')>All Branches</option>
+              @forelse ($branches as $br)
+                <option value="{{ base64_encode($br->id) }}"
+                        @selected((!Request::has('idm') && activeCompany()->id == $br->id)
+                                  || (base64_decode(Request::get('idm')) == $br->id))>
+                  {{ Str::upper($br->CB_Code) .' - '. Str::upper($br->CB_FullName.' | '.$br->company->GC_Name) }}
+                </option>
+              @empty                
+              @endforelse
+            </select>
+            <p></p>
+          </div>
+          <input type="hidden" name="agt" value="{{ \Str::random(25) }}">
+          <input type="hidden" name="ght" value="{{ \Str::random(30) }}">
+        </form>
+        @endcan
+      </div>
+      <!-- ./col -->
+    </div>
+     <!-- House State -->
+     <div class="row">
+      <div class="col-lg-6">
+        <!-- small box -->
+        <div class="small-box bg-teal">
+          <div class="inner">
+            <h5>House State</h5>
 
-            <p>Pending OneTMS</p>
+            <div class="row">
+              <div class="col-2 text-center">
+                <h3 id="info-pendingScanIn">0</h3>
+              </div>
+              <div class="col-3 text-center">
+                <h3 id="info-pendingSppb">0</h3>
+              </div>
+              <div class="col-2 text-center">
+                <h3 id="info-pendingXray">0</h3>
+              </div>
+              <div class="col-2 text-center">
+                <h3 id="info-sppb">0</h3>
+              </div>
+              <div class="col-2 text-center">
+                <h3 id="info-delivered">0</h3>
+              </div>
+            </div>
           </div>
           <div class="icon">
-            <i class="fas fa-truck-moving"></i>
+            <i class="ion ion-document"></i>
           </div>
           <div class="small-box-footer">
             <div class="row">
-              <div class="col-6">
+              <div class="col-2">
                 <a href="#"
-                   data-jenis="pending-in-tms"
-                   data-judul="Pending In OneTMS" 
-                   class="text-white btn-block informasi">
-                  IN <i class="fas fa-arrow-circle-right"></i>
+                    data-jenis="pending-in"
+                    data-judul="Pending Gate In" 
+                    class="text-white btn-block informasi">
+                  Pending Scan In <i class="fas fa-arrow-circle-right"></i>
                 </a>
               </div>
-              <div class="col-6">
+              <div class="col-3">
                 <a href="#" 
-                   data-jenis="pending-out-tms"
-                   data-judul="Pending Out OneTMS"
-                   class="text-white btn-block informasi">
-                  OUT <i class="fas fa-arrow-circle-right"></i>
+                    data-jenis="pending-sppb"
+                    data-judul="Custom Clearance Process"
+                    class="text-white btn-block informasi">
+                    Custom Clearance Process 
+                    <i class="fas fa-arrow-circle-right"></i>
+                </a>
+              </div>
+              <div class="col-2">
+                <a href="#" 
+                    data-jenis="pending-x-ray"
+                    data-judul="Pending X-Ray"
+                    class="text-white btn-block informasi">
+                  Pending X-Ray <i class="fas fa-arrow-circle-right"></i>
+                </a>
+              </div>
+              <div class="col-2">
+                <a href="#" 
+                    data-jenis="sppb"
+                    data-judul="Ready Scan Out"
+                    class="text-white btn-block informasi">
+                  Ready Scan Out <i class="fas fa-arrow-circle-right"></i>
+                </a>
+              </div>
+              <div class="col-2">
+                <a href="#" 
+                    data-jenis="delivered"
+                    data-judul="Delivered"
+                    class="text-white btn-block informasi">
+                  Delivered <i class="fas fa-arrow-circle-right"></i>
                 </a>
               </div>
             </div>
           </div>
+          
         </div>
       </div>
-      <!-- ./col -->
-    </div>
-     <!-- Info boxes -->
-     <div class="row">
-      <div class="col col-md-1"></div>
-      <div class="col-12 col-md-3">
-        <div class="info-box informasi" data-jenis="current-now" data-judul="Current Now">
-          <span class="info-box-icon bg-info elevation-1"><i class="fas fa-cog"></i></span>
-
-          <div class="info-box-content">
-            <span class="info-box-text">Current Now</span>
-            <span class="info-box-number">{{ number_format($current, 0, ',','.') }}</span>
+      <div class="col-12 col-md-2">
+        <div class="small-box bg-info">
+          <div class="inner">
+            <h5>Periksa Fisik</h5>
+            <h3 id="info-periksaFisik" class="text-center">0</h3>
           </div>
-          <!-- /.info-box-content -->
-        </div>
-        <!-- /.info-box -->
-      </div>
-      <!-- /.col -->
-      <div class="col-12 col-md-3">
-        <div class="info-box informasi mb-3" data-jenis="abandon" data-judul="Abandoned">
-          <span class="info-box-icon bg-danger elevation-1"><i class="fas fa-thumbs-down"></i></span>
-
-          <div class="info-box-content">
-            <span class="info-box-text">Abandon</span>
-            <span class="info-box-number">{{ number_format($abandon, 0, ',','.') }}</span>
+          <div class="icon">
+            <i class="ion ion-alert"></i>
           </div>
-          <!-- /.info-box-content -->
+          <a href="#"
+             data-jenis="periksa-fisik"
+             data-judul="Periksa Fisik"
+             class="small-box-footer informasi">
+            More Info
+            <i class="fas fa-arrow-circle-right"></i>
+          </a>
         </div>
-        <!-- /.info-box -->
       </div>
-      <!-- /.col -->
-      <div class="col-12 col-md-3">
-        <div class="info-box informasi mb-3" data-jenis="delivered" data-judul="Delivered">
-          <span class="info-box-icon bg-success elevation-1"><i class="fas fa-truck-moving"></i></span>
-
-          <div class="info-box-content">
-            <span class="info-box-text">Delivered</span>
-            <span class="info-box-number">{{ number_format($delivered, 0, ',','.') }}</span>
+      <div class="col-12 col-md-2">
+        <div class="small-box bg-orange">
+          <div class="inner">
+            <h5>NPD</h5>
+            <h3 id="info-npd" class="text-center">0</h3>
           </div>
-          <!-- /.info-box-content -->
+          <div class="icon">
+            <i class="ion ion-link"></i>
+          </div>
+          <a href="#"
+             data-jenis="npd"
+             data-judul="NPD"
+             class="small-box-footer informasi">
+            More Info
+            <i class="fas fa-arrow-circle-right"></i>
+          </a>
         </div>
-        <!-- /.info-box -->
       </div>
-      <!-- /.col -->
-      <div class="col col-md-1"></div>
+      <div class="col-12 col-md-2">
+        <div class="small-box bg-danger">
+          <div class="inner">
+            <h5>SKIP CN</h5>
+            <h3 id="info-skipcn" class="text-center">0</h3>
+          </div>
+          <div class="icon">
+            <i class="ion ion-link"></i>
+          </div>
+          <a href="#"
+             data-jenis="skipcn"
+             data-judul="SKIP CN"
+             class="small-box-footer informasi">
+            More Info
+            <i class="fas fa-arrow-circle-right"></i>
+          </a>
+        </div>
+      </div>
     </div>
     <!-- /.row -->
     <!-- /.row -->
@@ -210,6 +298,12 @@
             </div>
           </div>
           <div class="card-body">
+            <form id="formPrintLabel" action="" method="post" target="_blank">
+              @csrf
+              @method('PUT')
+              <input type="hidden" name="jenis" value="label">
+              <input type="hidden" name="mt" id="mt" value="legacy">
+            </form>
             <div class="table-responsive">
               @include('table.ajax')
             </div>            
@@ -283,196 +377,258 @@
   <script>
     var _token = "{{ csrf_token() }}";
     function getDataAjax(jenis, judul) {
-      $('#dataAjax').DataTable().destroy();
-      $('#info-table').html('<i class="fas fa-sync"></i>');
+      var sch = true;
+      var ft = 'YYYY-MM-DDTHH:mm:ss.SSSSSSZ';
+      var srt = true;
+
+      if(jenis === 'pending-in-wo-plp'
+          || jenis === 'pending-plp'
+          || jenis === 'pending-in-plp'
+      ) {
+        sch = false;
+        srt = false;
+        ft = 'YYYY-MM-DD';
+      }      
+      if ( $.fn.DataTable.isDataTable('#dataAjax') ) {
+        $('#dataAjax').DataTable().destroy();
+      }
+
+      $('#dataAjax tbody').empty();
+      
       $('.informasi').prop('disabled', true);
-      console.log('getDataAjax');
-      $.ajax({
-        url: "{{ route('dashboard.shipment') }}",
-        type: "GET",
-        data: {
-          jenis: jenis,
-          user: "{{ \Crypt::encrypt(auth()->user()->id) }}",
-        },
-        success:function(msg){
-          // console.log(msg.data);
-          $('#dataAjax').DataTable({
-            data: msg.data,
-            columns:[
-              @forelse ($items as $keys => $item)
-                @if($keys == 'id')
-                  {data:"DT_RowIndex", name: "DT_RowIndex", searchable: false},
-                @elseif(in_array($keys, ['ArrivalDate', 'ExitDate', 'SCAN_IN_DATE', 'SCAN_IN_TIME']))
-                {
-                  data: {
-                    _: "{{ $keys }}.display",
-                    sort: "{{ $keys }}.timestamp",
-                  }
-                },
-                @elseif(in_array($keys, ['BRUTO', 'ChargeableWeight']))
-                {data:"{{$keys}}", name: "{{$keys}}", className:'text-right', 
-                  render: $.fn.dataTable.render.number( ',', '.', 2 )
-                },
-                @elseif($keys == 'JML_BRG')
-                {data: "{{ $keys }}",name: "{{$keys}}", className:'text-center'},
-                @elseif($keys == 'actions')
-                {data:"actions", name: "actions", searchable: false, className:'text-center'},
-                @else
-                {data: "{{$keys}}", name: "{{$keys}}"},
-                @endif                
-              @empty
-              @endforelse              
-            ],
-            buttons: [                
-                {
-                  extend: 'excelHtml5',
-                  exportOptions: { 
-                    orthogonal: 'export',
-                    columns: [0,1,2,3,4,5,6,7,8,9,10,11,12,13]
-                  }
-                },
-                {
-                    extend: 'pdfHtml5',
-                    orientation: 'landscape',
-                    pageSize: 'LEGAL',
-                    exportOptions: { 
-                      orthogonal: 'export',
-                      columns: [0,1,2,3,4,5,6,7,8,9,10,11,12,13]
-                    },
-                },
-                {
-                  extend: 'print',
-                  exportOptions: { orthogonal: 'export' }
-                },
-            ],
-            createdRow: function( row, data, dataIndex ) {
-                // Set the data-status attribute, and add a class
-                // console.log(data['AL_PENERIMA']);
-              $( 'td' , row ).eq(5)
-                  .attr('data-toggle', 'tooltip')
-                  .attr('title', data['AL_PENERIMA']);                 
+      var user = "{{ \Crypt::encrypt(auth()->user()->id) }}";
+
+      $('#dataAjax').DataTable({
+        processing: true,
+        serverSide: true,
+        searchDelay: 350,
+        pageLength: parseInt("{{ config('app.page_length') }}"),
+        ajax:{
+          url: "{{ route('dashboard.shipment') }}",
+          data: function (d) {
+              d.jenis = jenis;
+              d.user = user;
+              d.idm = $('#idm').find(':selected').val();
+          },
+        },        
+        columns:[
+          @forelse ($items as $keys => $item)
+            @if($keys == 'id')
+              {data:"DT_RowIndex", name: "DT_RowIndex", searchable: false, orderable: false},
+            @elseif($keys == 'TGL_TIBA')
+            {
+              data:"{{$keys}}",
+              name: "{{$keys}}",
+              render: $.fn.dataTable.render.moment( ft, 'DD/MM/YYYY' ),
+              searchable: false,
             },
-            initComplete: function () {
-              this.api().columns([1,2,3,4]).every( function () {
-                var column = this;
-                var select = $('<select class="select2bs4clear" style="width: 100%;"><option value="">Select...</option></select>')
-                .appendTo( $(column.footer(3)).empty() )
-                .on( 'change', function () {
-                  var val = $.fn.dataTable.util.escapeRegex(
-                    $(this).val()
-                    );
-                  column
-                  .search( val ? '^'+val+'$' : '', true, false )
-                  .draw();
-                } );
-
-                column.data().unique().sort().each( function ( d ) {
-                  if(d !== ''){                    
-                    select.append( '<option value="'+d+'">'+d+'</option>' )
-                  }              
-                } );
-              } );
-
-              select2bs4Clear();
-            }, 
-          }).buttons().container().appendTo('#dataAjax_wrapper .col-md-6:eq(0)');
-
+            @elseif(in_array($keys, ['SCAN_IN_DATE', 'BC_DATE']))
+            {
+              data:"{{$keys}}",
+              name: "{{$keys}}",
+              render: $.fn.dataTable.render.moment( 'YYYY-MM-DD HH:mm:ss', 'DD/MM/YYYY HH:mm:ss' ),
+              searchable: sch,
+              orderable: srt,
+            },
+            @elseif($keys == 'ExitDate')
+            {
+              data:"{{$keys}}",
+              name: "{{$keys}}",
+              render: $.fn.dataTable.render.moment( 'YYYY-MM-DD HH:mm:ss', 'DD/MM/YYYY' ),
+              searchable: sch,
+              orderable: srt,
+            },
+            @elseif(in_array($keys, ['BRUTO', 'ChargeableWeight', 'NETTO']))
+            {data:"{{$keys}}", name: "{{$keys}}",searchable: false, className:'text-right', 
+              render: $.fn.dataTable.render.number( ',', '.', 2 )
+            },
+            @elseif(in_array($keys, ['JML_BRG', 'actions']))
+            {data: "{{ $keys }}",name: "{{$keys}}",searchable: false, className:'text-center'},
+            @elseif(in_array($keys, ['BC_CODE']))
+            {data: "{{ $keys }}",name: "{{$keys}}",searchable: sch,orderable: srt, className:'text-center'},
+            @elseif(in_array($keys, $skips))
+            {data: "{{ $keys }}",name: "{{$keys}}", searchable: sch, orderable: srt},
+            @else
+            {data: "{{$keys}}", name: "{{$keys}}"},
+            @endif                
+          @empty
+          @endforelse              
+        ],
+        dom: 'Blfrtip',
+        buttons: [
+          {
+            extend: 'excelHtml5',
+            action: function ( e, dt, node, config ) {                    
+              window.open("{{ route('dashboard.shipment') }}?tipe=xls&jenis="+jenis+"&user="+user);
+            }
+          },
+        ],
+        initComplete: function () {             
+          var api = this.api();
+      
+          if ( jenis != 'periksa-fisik' ) {
+            // Hide Office column
+            api.column(5).visible( false );
+          }
           $('.informasi').prop('disabled', false);
           $('#info-table').html(judul);
+          
+        }, 
+      });
+    }
+    function getPlp() { 
+      $('#info-pendingPlp').html('<i class="fas fa-sync fa-spin"></i>');
+      $('#info-pendingInWoPlp').html('<i class="fas fa-sync fa-spin"></i>');
+      $('#info-pendingInPlp').html('<i class="fas fa-sync fa-spin"></i>');
+      var idm = $('#idm').find(':selected').val();
+      $.ajax({
+        url: "{{ url()->current() }}",
+        type: "GET",
+        data:{
+          count: 1,
+          idm: idm,
+          plp: 1,
         },
-        error:function(jqXHR){
-          jsonValue = jQuery.parseJSON( jqXHR.responseText );
-          toastr.error(jqXHR.status + ' || ' + jsonValue.message, "Failed!", {timeOut: 3000, closeButton: true,progressBar: true});
-
-          $('.informasi').prop('disabled', false);
+        success: function(msg) {
+          $('#info-pendingPlp').html(formatAsMoney(msg.pendingPlp, 0));
+          $('#info-pendingInWoPlp').html(formatAsMoney(msg.pendingInWoPlp, 0));
+          $('#info-pendingInPlp').html(formatAsMoney(msg.pendingInPlp, 0));
         }
       });
     }
+    function getCurrent() {
+      $('#info-current').html('<i class="fas fa-sync fa-spin"></i>');
+      var idm = $('#idm').find(':selected').val();
+      $.ajax({
+        url: "{{ url()->current() }}",
+        type: "GET",
+        data:{
+          count: 1,
+          idm: idm,
+          current: 1,
+        },
+        success: function(msg) {         
+          $('#info-current').html(formatAsMoney(msg.current, 0));
+        }
+      });
+    }
+    function getAbandon() {      
+      $('#info-abandon').html('<i class="fas fa-sync fa-spin"></i>');
+      var idm = $('#idm').find(':selected').val();
+      $.ajax({
+        url: "{{ url()->current() }}",
+        type: "GET",
+        data:{
+          count: 1,
+          idm: idm,
+          abandon: 1,
+        },
+        success: function(msg) {  
+          $('#info-abandon').html(formatAsMoney(msg.abandon, 0));
+        }
+      });
+    }
+    function getStatus() {
+      $('#info-pendingScanIn').html('<i class="fas fa-sync fa-spin"></i>');
+      $('#info-pendingSppb').html('<i class="fas fa-sync fa-spin"></i>');
+      $('#info-sppb').html('<i class="fas fa-sync fa-spin"></i>');
+      $('#info-pendingXray').html('<i class="fas fa-sync fa-spin"></i>'); 
+      var idm = $('#idm').find(':selected').val();
+      $.ajax({
+        url: "{{ url()->current() }}",
+        type: "GET",
+        data:{
+          count: 1,
+          idm: idm,
+          stat: 1,
+        },
+        success: function(msg) {          
+          $('#info-pendingScanIn').html(formatAsMoney(msg.pendingScanIn, 0));
+          $('#info-pendingSppb').html(formatAsMoney(msg.pendingSppb, 0));
+          $('#info-sppb').html(formatAsMoney(msg.sppb, 0));
+          $('#info-pendingXray').html(formatAsMoney(msg.pendingXray, 0));          
+        }
+      });
+    }
+    function getOther() {      
+      $('#info-periksaFisik').html('<i class="fas fa-sync fa-spin"></i>');
+      $('#info-npd').html('<i class="fas fa-sync fa-spin"></i>');
+      $('#info-skipcn').html('<i class="fas fa-sync fa-spin"></i>');
+      var idm = $('#idm').find(':selected').val();
+      $.ajax({
+        url: "{{ url()->current() }}",
+        type: "GET",
+        data:{
+          count: 1,
+          idm: idm,
+          oth: 1,
+        },
+        success: function(msg) {
+          $('#info-periksaFisik').html(formatAsMoney(msg.periksaFisik, 0));
+          $('#info-npd').html(formatAsMoney(msg.npd, 0));
+          $('#info-skipcn').html(formatAsMoney(msg.skipcn, 0));
+        }
+      });
+    }
+    function getCompleted() {
+      $('#info-delivered').html('<i class="fas fa-sync fa-spin"></i>');
+      var idm = $('#idm').find(':selected').val();
+      $.ajax({
+        url: "{{ url()->current() }}",
+        type: "GET",
+        data:{
+          count: 1,
+          idm: idm,
+          wc: 1,
+        },
+        success: function(msg) { 
+          $('#info-delivered').html(formatAsMoney(msg.delivered, 0));
+        }
+      })
+    }
+    function getCount() {
+      $('#info-table').html('');
+      $('#dataAjax').DataTable().clear().destroy();
+      getPlp();
+      getCurrent();
+      getAbandon();
+      getStatus();
+      getOther();
+      getCompleted();
+    }
     jQuery(document).ready(function(){
-      
+      getCount();
       $(document).on('click', '.informasi', function(){
         var jenis = $(this).attr('data-jenis');
         var judul = $(this).attr('data-judul');
-
-        if(jenis !== 'delivered'){
-          getDataAjax(jenis, judul);
-        } else {          
-          $('#dataAjax').DataTable().destroy();
-          $('.informasi').prop('disabled', true);
-          var user = "{{ \Crypt::encrypt(auth()->user()->id) }}";
-
-          $('#dataAjax').DataTable({
-            processing: true,
-            serverSide: true,
-            searchDelay: 350,
-            ajax:{
-              url: "{{ route('dashboard.shipment') }}",
-              data: function (d) {
-                  d.jenis = jenis;
-                  d.user = user;
-              },
-            },
-            
-            columns:[
-              @forelse ($items as $keys => $item)
-                @if($keys == 'id')
-                  {data:"DT_RowIndex", name: "DT_RowIndex", searchable: false, orderable: false},
-                @elseif(in_array($keys, ['ArrivalDate', 'ExitDate', 'SCAN_IN_DATE', 'SCAN_IN_TIME']))
-                {
-                  data: {
-                    _: "{{ $keys }}.display",
-                    sort: "{{ $keys }}.timestamp",
-                  },
-                  name: "{{ $keys }}"
-                },
-                @elseif(in_array($keys, ['BRUTO', 'ChargeableWeight']))
-                {data:"{{$keys}}", name: "{{$keys}}", className:'text-right', 
-                  render: $.fn.dataTable.render.number( ',', '.', 2 )
-                },
-                @elseif($keys == 'JML_BRG')
-                {data: "{{ $keys }}",name: "{{$keys}}", className:'text-center'},
-                @elseif($keys == 'actions')
-                {data:"actions", name: "actions", searchable: false, className:'text-center'},
-                @else
-                {data: "{{$keys}}", name: "{{$keys}}"},
-                @endif                
-              @empty
-              @endforelse              
-            ],
-            dom: 'Blfrtip',
-            buttons: [
-              {
-                extend: 'excelHtml5',
-                action: function ( e, dt, node, config ) {                    
-                  window.open("{{ route('dashboard.shipment') }}?tipe=xls&jenis="+jenis+"&user="+user);
-                }
-              },
-            ],
-            initComplete: function () {             
-
-              $('.informasi').prop('disabled', false);
-              $('#info-table').html(judul);
-              
-            }, 
-          });
-        }        
+        getDataAjax(jenis, judul);
       });
       $(document).on('click', '.actions', function(){
         var id = $(this).attr('data-id');
         var href = $(this).attr('data-href');
         var method = $(this).attr('data-method');
         var jenis = $(this).attr('data-jenis');
+        var judul = $(this).attr('data-judul');
         var parameter = $(this).attr('data-parameter');
         var untuk = $(this).attr('data-untuk');
         var nama = $(this).html();
+        var htm = '';
+
+        if(parameter == 'plp-request')
+        {
+          htm += '<input type="text" class="form-control form-control-sm"' +
+                    ' name="pemohon" id="pemohon" placeholder="Pemohon" value="{{ Str::upper(Auth::user()->name ?? "") }}">';
+        } else {
+          htm += "Proceed "+nama+"!";
+        }
 
         if(untuk){
           $('#'+untuk).val(id);
         } else {
           Swal.fire({			
             title: 'Are you sure?',			
-            html: "Proceed "+nama+"!",
-            type: 'warning',
+            html: htm,
+            icon: 'warning',
             showCancelButton: true,
             confirmButtonColor: '#3085d6',
             cancelButtonColor: '#d33',
@@ -480,6 +636,12 @@
             confirmButtonText: 'Yes, proceed!'
           }).then((result) => {
             if (result.value) {
+              if(parameter == 'plp-request')
+              {
+                var pemohon = $('#pemohon').val();
+              } else {
+                var pemohon = '';
+              }
               $('.btn').prop('disabled', true);
               $.ajax({
                 url: href,
@@ -487,11 +649,12 @@
                 data:{
                   _token: _token,
                   jenis: parameter,
+                  pemohon:pemohon
                 },
                 success:function(msg){
                   if(msg.status == 'OK'){
                     toastr.success(msg.message, "Success!", {timeOut: 3000, closeButton: true,progressBar: true});
-                    getDataAjax(jenis);
+                    getDataAjax(jenis, judul);
                   } else {
                     toastr.error(msg.message, "Failed!", {timeOut: 3000, closeButton: true,progressBar: true});
                   }
@@ -548,10 +711,20 @@
           type: "GET",
           success: function(msg){
             console.log(msg);
-            if(msg.original.status == 'OK'){
-              toastr.success(msg.original.message, "Success!", {timeOut: 3000, closeButton: true,progressBar: true});
+            var status = '';
+            var message = '';
+            if(msg.hasOwnProperty('original')) //or msg.original!==undefined
+            {
+              status = msg.original.status;
+              message = msg.original.message;
             } else {
-              toastr.error(msg.original.message, "Failed!", {timeOut: 3000, closeButton: true,progressBar: true});
+              status = msg.status;
+              message = msg.message;
+            }
+            if(status == 'OK'){
+              toastr.success(message, "Success!", {timeOut: 3000, closeButton: true,progressBar: true});
+            } else {
+              toastr.error(message, "Failed!", {timeOut: 3000, closeButton: true,progressBar: true});
             }
           },
           error:function(jqXHR){
@@ -559,7 +732,14 @@
             toastr.error(jqXHR.status + ' || ' + jsonValue.message, "Failed!", {timeOut: 3000, closeButton: true,progressBar: true});
           }
         })
-      })
-    });
+      });
+      $(document).on('click', '.printlabel', function(){
+        var action = $(this).attr('data-href');
+
+        $('#formPrintLabel').attr('action', action);
+
+        $('#formPrintLabel').submit();
+      });
+    });   
   </script>
 @endsection

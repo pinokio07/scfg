@@ -460,11 +460,18 @@
     });
   }
 
-  function formatAsMoney(n) {
+  function formatAsMoney(n, dec = 2, sp = ',', ng = null) {
     var absValue = Math.abs(n);    
     var string = (Number(absValue).toFixed(2) + '').split('.');
-    var returnString = string[0].replace(/\B(?=(\d{3})+(?!\d))/g, ".") + ',' + (string[1] || '00');
+    var returnString = string[0].replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+    if(dec == 2){
+      var returnString = returnString + sp + (string[1] || '00');
+    }
 
+    if(ng != null){
+      return n < 0 ? '-' + returnString : returnString;
+    }
+    
     return n < 0 ? '(' + returnString + ')' : returnString;
   }
 

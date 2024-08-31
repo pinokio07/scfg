@@ -67,6 +67,11 @@ class User extends Authenticatable
       return $this->belongsToMany(GlbBranch::class, 'tps_branch_user', 'user_id', 'branch_id')->withPivot('active')->withTimeStamps();
     }
 
+    public function activeCompany()
+    {
+      return $this->belongsToMany(GlbBranch::class, 'tps_branch_user', 'user_id', 'branch_id')->withPivot('active')->wherePivot('active', true)->first();
+    }
+
     public function passLog()
     {
       return $this->hasMany(PassLog::class, 'user_id');
