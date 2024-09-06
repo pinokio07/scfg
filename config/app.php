@@ -189,6 +189,7 @@ return [
         Maatwebsite\Excel\ExcelServiceProvider::class,
         Barryvdh\DomPDF\ServiceProvider::class,
         Milon\Barcode\BarcodeServiceProvider::class,
+        Webklex\PDFMerger\Providers\PDFMergerServiceProvider::class,
         /*
          * Application Service Providers...
          */
@@ -213,9 +214,14 @@ return [
 
     'aliases' => Facade::defaultAliases()->merge([
         // 'ExampleClass' => App\Example\ExampleClass::class,
+        'Journal' => App\Helpers\Journal::class,
+        'Running' => App\Helpers\Running::class,
+        'Barkir' => App\Helpers\Barkir::class,
+        'Ceisa40' => App\Helpers\Ceisa40::class,
         'Datatables' => Yajra\Datatables\Facades\Datatables::class,
         'Excel' => Maatwebsite\Excel\Facades\Excel::class,
         'PDF' => Barryvdh\DomPDF\Facade\Pdf::class,
+        'PDFMerger' => Webklex\PDFMerger\Facades\PDFMergerFacade::class,
         'DNS1D' => Milon\Barcode\Facades\DNS1DFacade::class,
         'DNS2D' => Milon\Barcode\Facades\DNS2DFacade::class,
     ])->toArray(),

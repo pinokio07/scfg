@@ -51,9 +51,17 @@
             </div>
           </div>
         </div>
-      </div>      
+      </div>
       <div class="col-12">
-        <form action="{{ route('tps-online.scan-'.$type.'.store') }}" 
+        <div class="card">
+          <div id="hawb-info" class="card-body">
+            <h3>Please insert HAWB Number</h3>
+          </div>
+        </div>        
+      </div>
+      <div class="col-12">
+        <form id="form-scan"
+              action="{{ route('tps-online.scan-'.$type.'.store') }}" 
               method="post"
               class="needs-validation"
               novalidate
@@ -65,7 +73,7 @@
                     name="NO_HOUSE_BLAWB"
                     id="NO_HOUSE_BLAWB"
                     value="{{ $item->NO_HOUSE_BLAWB ?? '' }}"
-                    placeholder="Scan {{ Str::title($type) }}"
+                    placeholder="No HAWB"
                     required>
             <div class="input-group-append">
               <button type="submit" 
@@ -78,32 +86,26 @@
       </div>
     </div>
     @php
-      if(Session::has('sukses-scan')){
-        $bg = 'bg-success';
-        $judul = 'SCAN '. Str::upper($type) .' SUKSES';
-        $info = Session::get('sukses-scan');
-      } elseif(Session::has('gagal-scan')){
-        $bg = 'bg-danger';
-        $judul = 'SCAN '. Str::upper($type) .' GAGAL';
-        $info = Session::get('gagal-scan');
-      } else {
-        $bg = '';
-        $judul = '';
-        $info = '';
-      }
+      // if(Session::has('sukses-scan')){
+      //   $bg = 'bg-success';
+      //   $judul = 'SCAN '. Str::upper($type) .' SUKSES';
+      //   $info = Session::get('sukses-scan');
+      // } elseif(Session::has('gagal-scan')){
+      //   $bg = 'bg-danger';
+      //   $judul = 'SCAN '. Str::upper($type) .' GAGAL';
+      //   $info = Session::get('gagal-scan');
+      // } else {
+      //   $bg = '';
+      //   $judul = '';
+      //   $info = '';
+      // }
     @endphp
     <div class="row">
       <div class="col-12">
-        <div class="card {{$bg}}" style="height: 85vh;">
-          <div class="card-body">
-            <h1 class="text-center d-none d-md-block"
-                style="font-size: 10em;">{{ $judul }}</h1>            
-            <p class="text-center d-none d-md-block"
-                style="font-size:7em;">{!! $info !!}</p>
-            <h1 class="text-center d-block d-md-none"
-                style="font-size: 3em;">{{ $judul }}</h1>            
-            <p class="text-center d-block d-md-none"
-                style="font-size:2em;">{!! $info !!}</p>
+        <div id="card-respon" class="card" style="height: 85vh;">
+          <div id="body-respon" class="card-body">
+            <h1 id="info-judul" class="text-center" style="font-size: 10em;"></h1>            
+            <p id="info-isi" class="text-center" style="font-size:6em;"></p>
           </div>
         </div>
       </div>
@@ -114,9 +116,54 @@
 @endsection
 
 @section('footer')
-  <script>  
+  <script>
   jQuery(document).ready(function(){
     $('#NO_HOUSE_BLAWB').val('').focus();
+
+    $(document).on('submit', '#form-scan', function(e){
+      e.preventDefault();
+      var action = $(this).attr('action');
+      var hawb = $('#NO_HOUSE_BLAWB').val();
+
+      $('#NO_HOUSE_BLAWB').val('').focus();
+      
+      $.ajax({
+        url: action,
+        type: "POST",
+        data: {
+          NO_HOUSE_BLAWB: hawb,
+        },
+        success: function(msg){
+          var jdl = 'SCAN {{Str::upper($type)}} ';
+          var jml = '<h3>Master <b>'+msg.mawb+'</b>, scan {{ $type }} <b>'+msg.complete+'</b> of <b>'+msg.houses+'</b> House </h3>';
+
+          if(msg.status == 'OK')
+          {
+            jdl += 'SUCCESS';
+            $('#card-respon').removeClass('bg-danger')
+                             .addClass('bg-success');
+          } else {
+            jdl += 'GAGAL';
+            $('#card-respon').removeClass('bg-success')
+                             .addClass('bg-danger');
+          }
+
+          $('#info-judul').text('').text(jdl);
+          $('#info-isi').html(msg.message);
+
+          $('#hawb-info').html(jml);
+
+          // $('#NO_HOUSE_BLAWB').val('').focus();
+        },
+        error: function (jqXHR, exception) {
+          jsonValue = jQuery.parseJSON( jqXHR.responseText );
+          showError(jqXHR.status + ' || ' + jsonValue.message);
+
+          // $('#NO_HOUSE_BLAWB').val('').focus();
+        }
+      });
+
+    });
   });
   </script>
 @endsection

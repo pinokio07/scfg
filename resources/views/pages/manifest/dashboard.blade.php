@@ -232,7 +232,7 @@
       <div class="col-12 col-md-2">
         <div class="small-box bg-info">
           <div class="inner">
-            <h5>Periksa Fisik</h5>
+            <h5>Physical Inspection</h5>
             <h3 id="info-periksaFisik" class="text-center">0</h3>
           </div>
           <div class="icon">

@@ -27,32 +27,70 @@ class TpsOnlineScanInController extends Controller
         ]);
 
         if($data){
-          $house = House::with('master')
-                        ->where('NO_HOUSE_BLAWB', $data['NO_HOUSE_BLAWB'])
+          $house = House::with(['master.houses:id,MasterID,SCAN_IN_DATE'])
+                        ->where('NO_BARANG', $data['NO_HOUSE_BLAWB'])
                         ->first();
 
           if(!$house){
-            $info = 'House Number not Found!';
+            $info = 'House '.$data['NO_HOUSE_BLAWB'].' Tidak Ditemukan!';
 
-            event( new ScanHouse('in', '', 'gagal', $info) );
+            // event( new ScanHouse('in', '', 'gagal', $info) );
+
+            if($request->ajax())
+            {
+              return response()->json([
+                'status' => 'ERROR',
+                'message' => $info,
+                'mawb' => '-',
+                'houses' => 0,
+                'complete' => 0
+              ]);
+            }
 
             return redirect()->route('tps-online.scan-in')
                              ->with('gagal-scan', $info);
           }
 
-          if(!$house->master->PLPNumber){
-            $info = 'PLP Number not Found!';
+          $mawb = $house->mawb_parse;
+          $master = $house->master;
+          $hCount = $master->houses->count();
+          $complete = $master->houses->whereNotNull('SCAN_IN_DATE')->count();
 
-            event( new ScanHouse('in', $house->id, 'gagal', $info) );
+          if(!$master->PLPNumber){
+            $info = 'House '.$house->NO_BARANG.' ( '.$house->JML_BRG.' '.$house->JNS_KMS. ' ) ini belum mendapatkan persetujuan PLP / Nomor PLP Kosong';
+
+            // event( new ScanHouse('in', $house->id, 'gagal', $info) );
+
+            if($request->ajax())
+            {
+              return response()->json([
+                'status' => 'ERROR',
+                'message' => $info,
+                'mawb' => $mawb,
+                'houses' => $hCount,
+                'complete' => $complete
+              ]);
+            }
 
             return redirect()->route('tps-online.scan-in')
                              ->with('gagal-scan', $info);
           }
 
           if($house->SCAN_IN_DATE){
-            $info = 'House was already Scanned.';
+            $info = 'House '.$house->NO_BARANG.' ( '.$house->JML_BRG.' '.$house->JNS_KMS.' ) sudah pernah discan sebelumnya';
 
-            event( new ScanHouse('in', $house->id, 'gagal', $info) );
+            // event( new ScanHouse('in', $house->id, 'gagal', $info) );
+
+            if($request->ajax())
+            {
+              return response()->json([
+                'status' => 'ERROR',
+                'message' => $info,
+                'mawb' => $mawb,
+                'houses' => $hCount,
+                'complete' => $complete
+              ]);
+            }
 
             return redirect()->route('tps-online.scan-in.show', [
                                       'scan_in' => Crypt::encrypt($house->id)
@@ -60,26 +98,15 @@ class TpsOnlineScanInController extends Controller
                             ->with('gagal-scan', $info);
           }
 
-          // if(!$house->ShipmentNumber){
-          //   return redirect()->route('tps-online.scan-in.show', [
-          //                             'scan_in' => Crypt::encrypt($house->id)
-          //                           ])
-          //                   ->with('gagal', 'Shipment number is Empty.');
-          // }
-
           DB::beginTransaction();
 
           try {
             $now = now();
 
-            // $giwi = $this->createXML($house, $now->setTimeZone('UTC'));
-
-            // createLog('App\Models\House', $house->id, 'Create file '.$giwi.' at '.$now->translatedFormat('l d F Y H:i'));
-
             $house->update([
               'SCAN_IN_DATE' => $now,
               'SCAN_IN' => 'Y',
-              // 'CW_Ref_GateIn' => $giwi
+              'EnteranceDate' => $now->format('Y-m-d')
             ]);
 
             if(!$house->master->MasukGudang){
@@ -88,18 +115,25 @@ class TpsOnlineScanInController extends Controller
               ]);
             }
 
-            // $xmlGateIn = $this->sendGateIn($house, $now);
-
-            // return $xmlGateIn;
-
-            createLog('App\Models\House', $house->id, 'SCAN IN');
+            createLog('App\Models\House', $house->id, $house->NO_BARANG . ' SCAN IN');
 
             DB::commit();
 
-            $info = $house->mawb_parse . ' - ' . $house->NO_BARANG . '<br>'
+            $info = $house->mawb_parse . ' - ' . $house->NO_BARANG . ' ( '.$house->JML_BRG.' '.$house->JNS_KMS.' )<br>'
                     . Str::upper($house->NM_PENERIMA);
 
-            event( new ScanHouse('in', '', 'success', $info) );
+            // event( new ScanHouse('in', '', 'success', $info) );
+
+            if($request->ajax())
+            {
+              return response()->json([
+                'status' => 'OK',
+                'message' => $info,
+                'mawb' => $mawb,
+                'houses' => $hCount,
+                'complete' => ($complete + 1)
+              ]);
+            }
 
             return redirect()->route('tps-online.scan-in.show', [
                             'scan_in' => Crypt::encrypt($house->id)
@@ -109,6 +143,17 @@ class TpsOnlineScanInController extends Controller
           } catch (\Throwable $th) {
             DB::rollback();
             
+            if($request->ajax())
+            {
+              return response()->json([
+                'status' => 'ERROR',
+                'message' => $th->getMessage(),
+                'mawb' => $mawb,
+                'houses' => $hCount,
+                'pending' => $pending
+              ]);
+            }
+
             return redirect()->route('tps-online.scan-in.show', [
                                       'scan_in' => Crypt::encrypt($house->id)
                                     ])

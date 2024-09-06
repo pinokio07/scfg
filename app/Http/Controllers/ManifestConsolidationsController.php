@@ -190,7 +190,7 @@ class ManifestConsolidationsController extends Controller
         }
     }
     
-    public function show(Master $consolidation)
+    public function show(Master $consolidation, Request $request)
     {
         if($request->has('respon'))
         {

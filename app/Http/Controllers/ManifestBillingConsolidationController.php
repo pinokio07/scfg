@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
+use App\Helpers\Barkir;
 use App\Models\OrgHeader;
 use App\Models\AccChargeCode;
 use App\Models\Master;
@@ -12,7 +13,6 @@ use App\Models\BillingConsolidationSppbmcp;
 use App\Exports\BillingConsolidationExport;
 use DataTables;
 use Excel;
-use Barkir;
 use DB;
 
 class ManifestBillingConsolidationController extends Controller
@@ -40,13 +40,13 @@ class ManifestBillingConsolidationController extends Controller
                                        class="btn btn-xs btn-success elevation-2">
                                       <i class="fas fa-file-excel"></i> Excel
                                     </a>';
-                            if($user->can('create_accounting_billing_cost'))
-                            {
-                              $btn .= ' <button class="btn btn-xs btn-info elevation-2 jobcost"
-                                                data-id="'.$row->BillingID.'">
-                                          <i class="fas fa-plus"></i> Create Job Cost
-                                        </button>';
-                            }
+                            // if($user->can('create_accounting_billing_cost'))
+                            // {
+                            //   $btn .= ' <button class="btn btn-xs btn-info elevation-2 jobcost"
+                            //                     data-id="'.$row->BillingID.'">
+                            //               <i class="fas fa-plus"></i> Create Job Cost
+                            //             </button>';
+                            // }
 
                             return $btn;
                            })

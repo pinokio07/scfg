@@ -27,31 +27,69 @@ class TpsOnlineScanOutController extends Controller
         ]);
 
         if($data){
-          $house = House::where('NO_HOUSE_BLAWB', $data['NO_HOUSE_BLAWB'])
+          $house = House::with(['master.houses:id,MasterID,SCAN_OUT_DATE'])
+                        ->where('NO_BARANG', $data['NO_HOUSE_BLAWB'])
                         ->first();
 
           if(!$house){
-            $info = 'House Number not Found!';
+            $info = 'House '.$data['NO_HOUSE_BLAWB'].' Tidak ditemukan!';
 
-            event( new ScanHouse('out', '', 'gagal', $info) );
+            // event( new ScanHouse('out', '', 'gagal', $info) );
 
+            if($request->ajax())
+            {
+              return response()->json([
+                'status' => 'ERROR',
+                'message' => $info,
+                'mawb' => '-',
+                'houses' => 0,
+                'complete' => 0
+              ]);
+            }
             return redirect()->route('tps-online.scan-out')
                             ->with('gagal-scan', $info);
           }
 
-          if(!$house->SCAN_IN_DATE){
-            $info = 'This house is not yet Scan In!';
+          $mawb = $house->mawb_parse;
+          $master = $house->master;
+          $hCount = $master->houses->count();
+          $complete = $master->houses->whereNotNull('SCAN_OUT_DATE')->count();
 
-            event( new ScanHouse('out', $house->id, 'gagal', $info) );
+          if(!$house->SCAN_IN_DATE){
+            $info = 'House '.$house->NO_BARANG.' ( '.$house->JML_BRG.' '.$house->JNS_KMS.' ) ini belum Scan In!';
+
+            // event( new ScanHouse('out', $house->id, 'gagal', $info) );
+
+            if($request->ajax())
+            {
+              return response()->json([
+                'status' => 'ERROR',
+                'message' => $info,
+                'mawb' => $mawb,
+                'houses' => $hCount,
+                'complete' => $complete
+              ]);
+            }
 
             return redirect()->route('tps-online.scan-out')
                             ->with('gagal-scan', $info);
           }
 
           if($house->SCAN_OUT_DATE){
-            $info = 'House was already Scanned.';
+            $info = 'House '.$house->NO_BARANG.' ( '.$house->JML_BRG.' '.$house->JNS_KMS.' ) sudah pernah discan out sebelumnya.';
 
-            event( new ScanHouse('out', $house->id, 'gagal', $info) );
+            // event( new ScanHouse('out', $house->id, 'gagal', $info) );
+
+            if($request->ajax())
+            {
+              return response()->json([
+                'status' => 'ERROR',
+                'message' => $info,
+                'mawb' => $mawb,
+                'houses' => $hCount,
+                'complete' => $complete
+              ]);
+            }
 
             return redirect()->route('tps-online.scan-out.show', [
                                       'scan_out' => Crypt::encrypt($house->id)
@@ -59,21 +97,68 @@ class TpsOnlineScanOutController extends Controller
                             ->with('gagal-scan', $info);
           }
 
-          if(!$house->SPPBNumber){
-            $info = 'SPPB Number not found.';
+          if(!in_array($house->JNS_AJU, [1,2]) 
+              && !$house->SPPBNumber)
+          {
+            $info = 'SPPB Kosong untuk House '.$house->NO_BARANG.' ( '.$house->JML_BRG.' '.$house->JNS_KMS.' ).';
 
-            event( new ScanHouse('out', $house->id, 'gagal', $info) );
+            // event( new ScanHouse('out', $house->id, 'gagal', $info) );
+
+            if($request->ajax())
+            {
+              return response()->json([
+                'status' => 'ERROR',
+                'message' => $info,
+                'mawb' => $mawb,
+                'houses' => $hCount,
+                'complete' => $complete
+              ]);
+            }
 
             return redirect()->route('tps-online.scan-out.show', [
                                       'scan_out' => Crypt::encrypt($house->id)
                                     ])
                             ->with('gagal-scan', $info);
           }
-          // dd($house->activeTegah);
+          
+          if(in_array($house->JNS_AJU, [1,2])
+              && !in_array($house->BC_CODE, [401, 403, 404, 405])) {
+            $info = 'House '.$house->NO_BARANG.' ( '.$house->JML_BRG.' '.$house->JNS_KMS.' ) ini masih dalam proses Clearance';
+
+            // event( new ScanHouse('out', $house->id, 'gagal', $info) );
+
+            if($request->ajax())
+            {
+              return response()->json([
+                'status' => 'ERROR',
+                'message' => $info,
+                'mawb' => $mawb,
+                'houses' => $hCount,
+                'complete' => $complete
+              ]);
+            }
+
+            return redirect()->route('tps-online.scan-out.show', [
+                                      'scan_out' => Crypt::encrypt($house->id)
+                                    ])
+                            ->with('gagal-scan', $info);
+          }
+          
           if(!$house->activeTegah->isEmpty()){
-            $info = 'This house is restricted by Customs.';
+            $info = 'House '.$house->NO_BARANG.' ( '.$house->JML_BRG.' '.$house->JNS_KMS.' ) ini ditegah oleh Bea Cukai';
 
-            event( new ScanHouse('out', $house->id, 'gagal', $info) );
+            // event( new ScanHouse('out', $house->id, 'gagal', $info) );
+
+            if($request->ajax())
+            {
+              return response()->json([
+                'status' => 'ERROR',
+                'message' => $info,
+                'mawb' => $mawb,
+                'houses' => $hCount,
+                'complete' => $complete
+              ]);
+            }
 
             return redirect()->route('tps-online.scan-out.show', [
                                       'scan_out' => Crypt::encrypt($house->id)
@@ -87,28 +172,35 @@ class TpsOnlineScanOutController extends Controller
 
             $now = now();
 
-            // $gowia = $this->createXML($house, $now->setTimeZone('UTC'));
-
-            // createLog('App\Models\House', $house->id, 'Create file '.$gowia.' at '.$now->translatedFormat('l d F Y H:i'));
-
             $house->update([
               'SCAN_OUT_DATE' => $now,
               'SCAN_OUT' => 'Y',
               'ExitDate' => $now->format('Y-m-d'),
               'ExitTime' => $now->format('H:i:s'),
-              // 'CW_Ref_GateOut' => $gowia
+              'BC_CODE' => 408,
+              'BC_DATE' => $now,
+              'BC_STATUS' => 'BARANG KELUAR DARI GUDANG'
             ]);
 
-            // $xmlGateOut = $this->sendGateOut($house, $now);
-
-            createLog('App\Models\House', $house->id, 'SCAN OUT');
+            createLog('App\Models\House', $house->id, $house->NO_BARANG . ' SCAN OUT');
 
             DB::commit();
 
-            $info = $house->mawb_parse . ' - ' . $house->NO_BARANG . '<br>'
+            $info = $house->mawb_parse . ' - ' . $house->NO_BARANG . ' ( '.$house->JML_BRG.' '.$house->JNS_KMS.' )<br>'
                     . Str::upper($house->NM_PENERIMA);
 
-            event( new ScanHouse('out', '', 'success', $info) );
+            // event( new ScanHouse('out', '', 'success', $info) );
+
+            if($request->ajax())
+            {
+              return response()->json([
+                'status' => 'OK',
+                'message' => $info,
+                'mawb' => $mawb,
+                'houses' => $hCount,
+                'complete' => ($complete + 1)
+              ]);
+            }
 
             return redirect()->route('tps-online.scan-out.show', [
                             'scan_out' => Crypt::encrypt($house->id)
@@ -117,6 +209,17 @@ class TpsOnlineScanOutController extends Controller
 
           } catch (\Throwable $th) {
             DB::rollback();
+            
+            if($request->ajax())
+            {
+              return response()->json([
+                'status' => 'ERROR',
+                'message' => $th->getMessage(),
+                'mawb' => $mawb,
+                'houses' => $hCount,
+                'complete' => $complete
+              ]);
+            }
             
             return redirect()->route('tps-online.scan-out.show', [
                               'scan_out' => Crypt::encrypt($house->id)
