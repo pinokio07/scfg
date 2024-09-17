@@ -23,14 +23,17 @@ class InventoryCurrentNow2023Controller extends Controller
         if($request->tanggal){
           $tanggal = Carbon::createFromFormat('d-m-Y', $request->tanggal);
         }
+
+        $start = $tanggal->copy()->startOfDay()->format('Y-m-d H:i:s');
+        $end = $tanggal->copy()->endOfDay()->format('Y-m-d H:i:s');
         
         $query = House::with(['master', 'details', 'activeTegah'])
-                      ->where(function($ex) use ($tanggal){
-                        $ex->where('ExitDate', '>', $tanggal)
-                          ->orWhereNull('ExitDate');
+                      ->where(function($ex) use ($start){
+                        $ex->where('SCAN_OUT_DATE', '>', $start)
+                          ->orWhereNull('SCAN_OUT_DATE');
                       })
                       ->whereNotNull('SCAN_IN_DATE')
-                      ->where('SCAN_IN_DATE', '<=', $tanggal);
+                      ->where('SCAN_IN_DATE', '<=', $end);
 
         return DataTables::eloquent($query)
                         ->addIndexColumn()
