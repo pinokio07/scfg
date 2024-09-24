@@ -22,7 +22,7 @@ class ExRateTaxCron extends Command
      *
      * @var string
      */
-    protected $description = 'Get Exchange Rate from TPS';
+    protected $description = 'Get Exchange Rate from KEMENKEU';
 
     /**
      * Execute the console command.

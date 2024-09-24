@@ -3,18 +3,35 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Http;
 use League\Flysystem\UnableToWriteFile;
 use Illuminate\Http\Request;
 use App\Helpers\SoapHelper;
+use App\Helpers\Barkir;
 use App\Models\SchedulerLog;
 use App\Models\KodeRes;
 use App\Models\Master;
+use App\Models\IdModul;
+use App\Models\MasterLegacy;
+use App\Models\MasterBatch;
+use App\Models\GlbBranch;
 use App\Models\House;
 use App\Models\Sppb;
+use App\Models\PermitLegacy;
 use App\Models\PlpOnline;
 use App\Models\PlpOnlineLog;
+use App\Models\BillingLog;
+use App\Models\BillingBatch;
+use App\Models\BillingConsolidation;
+use App\Models\BillingConsolidationLegacy;
+use App\Models\BillingConsolBatch;
+use App\Models\BillingConsolidationDetail;
+use App\Models\BillingConsolidationSppbmcp;
+use App\Jobs\KerryScenarioJob;
+use App\Jobs\TarikResponJob;
+use App\Jobs\SyncLegacyJob;
 use Carbon\Carbon;
-use Str, Auth, DB;
+use Str, Arr, Auth, DB, Config;
 
 class SchedulerController extends Controller
 {
@@ -62,7 +79,16 @@ class SchedulerController extends Controller
           break;
         case 'manual':
           return $this->manualOnDemand($request);
-          break;       
+          break;
+        case 'getbilling':
+          return $this->getBilling();
+          break;
+        case 'billing':
+          return $this->billing($request);
+          break;
+        case 'respon':
+          return $this->respon();
+          break;        
         default:
           # code...
           break;
@@ -268,16 +294,31 @@ class SchedulerController extends Controller
     {
       if(!$id){
         $houses = House::whereNotNull('SCAN_IN_DATE')
-                        ->whereNull('TPS_GateInDateTime')
-                        ->limit(5)
+                        // ->whereNotNull('PLP_SETUJU_DATE')
+                        ->whereNull('TPS_GateInREF')
+                        ->where('TGL_TIBA', '>', '2024-07-01')
+                        ->whereNotNull('NO_BC11')
+                        ->where('NO_BC11', '<>', '')
+                        // ->whereIn('BRANCH', [1, 2]) // Remove when barkir live
+                        ->whereHas('master', function($m){
+                          return $m->whereNotNull('PLPNumber')
+                                   ->whereNotNull('PLPDate');
+                        })
+                        ->with(['master'])
+                        ->limit(50)
                         ->get();
 
-        if(!$houses){
-          echo "No house found for gate out.";
+        if(count($houses) == 0){
+          \Log::warning("No house found for gate in.");
+          echo "No house found for gate in.";
         }
 
         foreach ($houses as $house) {
+          \Log::notice("Start Scheduler Gate In for ".$house->NO_BARANG);
+
           $hasil = $this->sendGateIn($request, $house);
+
+          \Log::info('Kirim Gate In '.$house->NO_BARANG.' Status: '.$hasil['status'].'; Info : '.$hasil['info']);
 
           echo 'Kirim ulang Gate In '.$house->NO_BARANG.' Status: '.$hasil['status'].'; Info : '.$hasil['info']." menunggu proses AWB selanjutnya ....<br/>";
         }
@@ -304,22 +345,42 @@ class SchedulerController extends Controller
       if(!$id){
         $houses = House::whereNotNull('SCAN_IN_DATE')
                         ->whereNotNull('SCAN_OUT_DATE')
-                        ->whereNull('TPS_GateOutDateTime')
-                        ->whereNotNull('NO_DAFTAR_PABEAN')
-                        ->limit(5)
+                        ->whereNotNull('NO_BC11')
+                        ->where('NO_BC11', '<>', '')
+                        ->whereNull('TPS_GateOutREF')
+                        ->where('TGL_TIBA', '>', '2024-07-01')
+                        ->where(function($h){
+                          $h->whereNotNull('NO_DAFTAR_PABEAN')
+                            // ->orWhereIn('JNS_AJU', [1,2]);
+                            ->orWhere(function($hb){
+                              $hb->whereIn('JNS_AJU', [1,2])
+                                 ->whereHas('bclog', function($bc){
+                                  return $bc->whereIn('BC_CODE', [401,403,404]);
+                                 });
+                            });
+                        })
+                        // ->whereIn('BRANCH', [1,2]) // Remove when barkir live
+                        // ->whereNotNull('NO_DAFTAR_PABEAN') // Remove when barkir live
+                        ->limit(50)
                         ->get();
-        if(!$houses){
+        if(count($houses) == 0){
+          \Log::warning('No house found for gate out.');
           echo "No house found for gate out.";
         }
                         
         foreach ($houses as $house) {
-          if(!$house->NO_DAFTAR_PABEAN){
+          if(!$house->NO_DAFTAR_PABEAN && !in_array($house->JNS_AJU, [1,2])){
             if($request->ajax()){
               return response()->json(['status' => "ERROR", 'message' => 'Pabean No is Empty']);
             }
+            \Log::warning('No Pabean kosong untuk hawb '.$house->NO_BARANG);
             echo 'NO PABEAN KOSONG';
           } else {
+            \Log::notice("Start Scheduler Gate Out for ".$house->NO_BARANG);
+
             $hasil = $this->sendGateOut($request, $house);
+
+            \Log::info('Kirim Gate Out '.$house->NO_BARANG.' Status: '.$hasil['status'].'; Info : '.$hasil['info']);
 
             echo 'Kirim ulang Gate Out '.$house->NO_BARANG.' Status: '.$hasil['status'].'; Info : '.$hasil['info']." menunggu proses AWB selanjutnya ....<br/>";
           }          
@@ -335,14 +396,15 @@ class SchedulerController extends Controller
             return response()->json(['status' => "ERROR", 'message' => 'Pabean No is Empty']);
           }
           echo 'NO PABEAN KOSONG';
-        }
-        $hasil = $this->sendGateOut($request, $house, true);
+        } else {
+          $hasil = $this->sendGateOut($request, $house, true);
 
-        if($request->ajax()){
-          return response()->json($hasil);
-        }
-
-        echo 'Kirim ulang Gate Out '.$house->NO_BARANG.' Status: '.$hasil['status'].'; Info : '.$hasil['info']."<br/>";
+          if($request->ajax()){
+            return response()->json($hasil);
+          }
+  
+          echo 'Kirim ulang Gate Out '.$house->NO_BARANG.' Status: '.$hasil['status'].'; Info : '.$hasil['info']."<br/>";
+        }        
       }      
     }
 
@@ -350,9 +412,9 @@ class SchedulerController extends Controller
     {
         $sh = new SoapHelper;  
         $soap = $sh->soap();
-
+        
         DB::beginTransaction();
-
+        \Log::notice('Scheduler PLP Start');
         try {
           $sResponse = $soap->GetResponPLP_Tujuan(
             [
@@ -397,15 +459,16 @@ class SchedulerController extends Controller
           }
 
           $this->createLog(NULL, NULL, 'GetResponPLP_Tujuan', $request, $response, $message);
-
+          \Log::info($message);
           DB::commit();
           
         } catch (\Throwable $th) {
           DB::rollback();
-
-          $this->createLog(NULL, NULL, 'GetResponPLP_Tujuan', NULL, NULL, 'FAILED : '.$th->getMessage());
-
-          DB::commit();
+          
+          \Log::error('Request : <br/><xmp>',
+                  $soap->__getLastRequest(),
+                  '</xmp><br/><br/> Error Message : <br/>',
+                  $th->getMessage());
 
           echo 'Request : <br/><xmp>',
                   $soap->__getLastRequest(),
@@ -448,7 +511,7 @@ class SchedulerController extends Controller
             ));
             
           $LastRequest =  $soap->__getLastRequest();
-          $soapResponse = $soap->__getLastResponse();             
+          $soapResponse = $soap->__getLastResponse();
 
           $log = $this->createLog($mdl, $hid, 'GetImpor_SPPB', $LastRequest, $soapResponse, 'PENDING');
   
@@ -474,14 +537,34 @@ class SchedulerController extends Controller
   
             if (!array_key_exists('HEADER', $data)) {
               foreach ($data as $sppb) {
-                $this->updatePib($sppb, 'On Demand');
+                $c = $this->updatePib($sppb, 'On Demand');
+                if($c > 0)
+                {
+                  $dataToSave = $this->getDataPIB($sppb);
 
-                $dataToSave = $this->getDataPIB($sppb);
+                  $sppbSave = Sppb::updateOrCreate([
+                                    'CAR' => $sppb["HEADER"]["CAR"]
+                                  ], $dataToSave);
+  
+                  $dataPib[]  = [
+                    'NO_SPPB' => $data['HEADER']['NO_SPPB'],
+                    'TGL_SPPB' => date('Y-m-d', strtotime($data['HEADER']['TGL_SPPB'])),
+                    'NO_PIB' => $data['HEADER']['NO_PIB'],
+                    'TGL_PIB' => date('Y-m-d', strtotime($data['HEADER']['TGL_PIB'])),
+                    'CAR' => $data['HEADER']['CAR']
+                  ];
+                }                
+              }
+            } else {
+              $c = $this->updatePib($data, 'On Demand');
+              if($c > 0)
+              {
+                $dataToSave = $this->getDataPIB($data);
 
                 $sppbSave = Sppb::updateOrCreate([
-                                  'CAR' => $sppb["HEADER"]["CAR"]
+                                  'CAR' => $data["HEADER"]["CAR"]
                                 ], $dataToSave);
-
+  
                 $dataPib[]  = [
                   'NO_SPPB' => $data['HEADER']['NO_SPPB'],
                   'TGL_SPPB' => date('Y-m-d', strtotime($data['HEADER']['TGL_SPPB'])),
@@ -489,23 +572,7 @@ class SchedulerController extends Controller
                   'TGL_PIB' => date('Y-m-d', strtotime($data['HEADER']['TGL_PIB'])),
                   'CAR' => $data['HEADER']['CAR']
                 ];
-              }
-            } else {
-              $this->updatePib($data, 'On Demand');
-
-              $dataToSave = $this->getDataPIB($data);
-
-              $sppbSave = Sppb::updateOrCreate([
-                                'CAR' => $data["HEADER"]["CAR"]
-                              ], $dataToSave);
-
-              $dataPib[]  = [
-                'NO_SPPB' => $data['HEADER']['NO_SPPB'],
-                'TGL_SPPB' => date('Y-m-d', strtotime($data['HEADER']['TGL_SPPB'])),
-                'NO_PIB' => $data['HEADER']['NO_PIB'],
-                'TGL_PIB' => date('Y-m-d', strtotime($data['HEADER']['TGL_PIB'])),
-                'CAR' => $data['HEADER']['CAR']
-              ];
+              }              
             }
             DB::commit();
   
@@ -587,7 +654,7 @@ class SchedulerController extends Controller
             
           $LastRequest =  $soap->__getLastRequest();
           $soapResponse = $soap->__getLastResponse();
-
+          
           $log = $this->createLog($mdl, $hid, 'GetSppb_Bc23', $LastRequest, $soapResponse, 'PENDING');
 
           DB::commit();
@@ -612,38 +679,42 @@ class SchedulerController extends Controller
   
             if (!array_key_exists('HEADER', $data)) {
               foreach ($data as $sppb) {
-                $this->updateBc($sppb, 'On Demand');
+                $c = $this->updateBc($sppb, 'On Demand');
+                if($c > 0)
+                {
+                  $dataToSave = $this->getDataBC23($sppb);
 
-                $dataToSave = $this->getDataBC23($sppb);
-
-                $sppbSave = Sppb::updateOrCreate([
-                                  'CAR' => $sppb["HEADER"]["CAR"]
-                                ], $dataToSave);
-
-                $dataPib[]  = [
-                  'NO_SPPB' => $sppb['HEADER']['NO_SPPB'],
-                  'TGL_SPPB' => date('Y-m-d', strtotime($sppb['HEADER']['TGL_SPPB'])),
-                  'NO_PIB' => $sppb['HEADER']['NO_PIB'],
-                  'TGL_PIB' => date('Y-m-d', strtotime($sppb['HEADER']['TGL_PIB'])),
-                  'CAR' => $sppb['HEADER']['CAR']
-                ];
+                  $sppbSave = Sppb::updateOrCreate([
+                                    'CAR' => $sppb["HEADER"]["CAR"]
+                                  ], $dataToSave);
+  
+                  $dataPib[]  = [
+                    'NO_SPPB' => $sppb['HEADER']['NO_SPPB'],
+                    'TGL_SPPB' => date('Y-m-d', strtotime($sppb['HEADER']['TGL_SPPB'])),
+                    'NO_PIB' => $sppb['HEADER']['NO_PIB'],
+                    'TGL_PIB' => date('Y-m-d', strtotime($sppb['HEADER']['TGL_PIB'])),
+                    'CAR' => $sppb['HEADER']['CAR']
+                  ];
+                }
               }
             } else {
-              $this->updateBc($data, 'On Demand');
+              $c = $this->updateBc($data, 'On Demand');
+              if($c > 0)
+              {
+                $dataToSave = $this->getDataBC23($data);
 
-              $dataToSave = $this->getDataBC23($data);
-
-              $sppbSave = Sppb::updateOrCreate([
-                                'CAR' => $data["HEADER"]["CAR"]
-                              ], $dataToSave);
-
-              $dataPib[]  = [
-                'NO_SPPB' => $data['HEADER']['NO_SPPB'],
-                'TGL_SPPB' => date('Y-m-d', strtotime($data['HEADER']['TGL_SPPB'])),
-                'NO_PIB' => $data['HEADER']['NO_PIB'],
-                'TGL_PIB' => date('Y-m-d', strtotime($data['HEADER']['TGL_PIB'])),
-                'CAR' => $data['HEADER']['CAR']
-              ];
+                $sppbSave = Sppb::updateOrCreate([
+                                  'CAR' => $data["HEADER"]["CAR"]
+                                ], $dataToSave);
+  
+                $dataPib[]  = [
+                  'NO_SPPB' => $data['HEADER']['NO_SPPB'],
+                  'TGL_SPPB' => date('Y-m-d', strtotime($data['HEADER']['TGL_SPPB'])),
+                  'NO_PIB' => $data['HEADER']['NO_PIB'],
+                  'TGL_PIB' => date('Y-m-d', strtotime($data['HEADER']['TGL_PIB'])),
+                  'CAR' => $data['HEADER']['CAR']
+                ];
+              }              
             }
             DB::commit();
   
@@ -750,39 +821,43 @@ class SchedulerController extends Controller
   
             if (!array_key_exists('HEADER', $data)) {
               foreach ($data as $sppb) {
-                $this->updateBc16($sppb, 'On Demand');
+                $c = $this->updateBc16($sppb, 'On Demand');
+                if($c > 0)
+                {
+                  $dataToSave = $this->getDataBc16($sppb);
 
-                $dataToSave = $this->getDataBc16($sppb);
-
-                $sppbSave = Sppb::updateOrCreate([
-                                  'CAR' => $sppb["HEADER"]["CAR"]
-                                ], $dataToSave);
-
-                $dataPib[]  = [
-                  'NO_SPPB' => $sppb['HEADER']['NO_DOK_INOUT'],
-                  'TGL_SPPB' => date('Y-m-d', strtotime($sppb['HEADER']['TGL_DOK_INOUT'])),
-                  'NO_PIB' => $sppb['HEADER']['NO_DOK_INOUT'],
-                  'TGL_PIB' => date('Y-m-d', strtotime($sppb['HEADER']['TGL_DOK_INOUT'])),
-                  'CAR' => $sppb['HEADER']['CAR']
-                ];
+                  $sppbSave = Sppb::updateOrCreate([
+                                    'CAR' => $sppb["HEADER"]["CAR"]
+                                  ], $dataToSave);
+  
+                  $dataPib[]  = [
+                    'NO_SPPB' => $sppb['HEADER']['NO_DOK_INOUT'],
+                    'TGL_SPPB' => date('Y-m-d', strtotime($sppb['HEADER']['TGL_DOK_INOUT'])),
+                    'NO_PIB' => $sppb['HEADER']['NO_DOK_INOUT'],
+                    'TGL_PIB' => date('Y-m-d', strtotime($sppb['HEADER']['TGL_DOK_INOUT'])),
+                    'CAR' => $sppb['HEADER']['CAR']
+                  ];
+                }                
               }
             } else {
 
-              $this->updateBc16($data, 'On Demand');
-
-              $dataToSave = $this->getDataBc16($data);
+              $c = $this->updateBc16($data, 'On Demand');
+              if($c > 0)
+              {
+                $dataToSave = $this->getDataBc16($data);
               
-              $sppbSave = Sppb::updateOrCreate([
-                                'CAR' => $data["HEADER"]["CAR"]
-                              ], $dataToSave);
-                              
-              $dataPib[]  = [
-                'NO_SPPB' => $data['HEADER']['NO_DOK_INOUT'],
-                'TGL_SPPB' => date('Y-m-d', strtotime($data['HEADER']['TGL_DOK_INOUT'])),
-                'NO_PIB' => $data['HEADER']['NO_DOK_INOUT'],
-                'TGL_PIB' => date('Y-m-d', strtotime($data['HEADER']['TGL_DOK_INOUT'])),
-                'CAR' => $data['HEADER']['CAR']
-              ];
+                $sppbSave = Sppb::updateOrCreate([
+                                  'CAR' => $data["HEADER"]["CAR"]
+                                ], $dataToSave);
+                                
+                $dataPib[]  = [
+                  'NO_SPPB' => $data['HEADER']['NO_DOK_INOUT'],
+                  'TGL_SPPB' => date('Y-m-d', strtotime($data['HEADER']['TGL_DOK_INOUT'])),
+                  'NO_PIB' => $data['HEADER']['NO_DOK_INOUT'],
+                  'TGL_PIB' => date('Y-m-d', strtotime($data['HEADER']['TGL_DOK_INOUT'])),
+                  'CAR' => $data['HEADER']['CAR']
+                ];
+              }              
             }
             DB::commit();
   
@@ -886,6 +961,8 @@ class SchedulerController extends Controller
             $json = json_encode($res);
             $data = json_decode($json, TRUE);
 
+            // dd($data);
+
             $dataPib = [];
   
             if (!array_key_exists('HEADER', $data)) {
@@ -966,7 +1043,7 @@ class SchedulerController extends Controller
       }
       
     }
-
+    
     public function importpermit()
     {
       $sh = new SoapHelper;
@@ -985,8 +1062,8 @@ class SchedulerController extends Controller
           ));
           
         $LastRequest =  $soap->__getLastRequest();
-        $soapResponse = $soap->__getLastResponse();
-        
+        $soapResponse = $soap->__getLastResponse();        
+
         $response = $sh->getResults('GetImporPermit_FASPResult', $soapResponse);
 
         if ($response != ''
@@ -1006,25 +1083,31 @@ class SchedulerController extends Controller
           $res = simplexml_load_string($hasil);
           $json = json_encode($res);
           $data = json_decode($json, TRUE);
-
+          $p = 0;
           foreach($data as $d){
             if(array_key_exists('HEADER', $d)){
-              $this->updatePib($d, 'Scheduler');
-  
-              $dataToSave = $this->getDataPIB($d);
+              $c = $this->updatePib($d, 'Scheduler');
+              if($c > 0)
+              {
+                $dataToSave = $this->getDataPIB($d);
 
-              $sppbSave = Sppb::updateOrCreate([
-                                'CAR' => $d["HEADER"]["CAR"]
-                              ], $dataToSave);
+                $sppbSave = Sppb::updateOrCreate([
+                                  'CAR' => $d["HEADER"]["CAR"]
+                                ], $dataToSave);
+              }
+              $p += $c;
             } else {
               foreach($d as $sppb){
-                $this->updatePib($sppb, 'Scheduler');
+                $c = $this->updatePib($sppb, 'Scheduler');
+                if($c > 0)
+                {
+                  $dataToSave = $this->getDataPIB($sppb);
   
-                $dataToSave = $this->getDataPIB($sppb);
-  
-                $sppbSave = Sppb::updateOrCreate([
-                                  'CAR' => $sppb["HEADER"]["CAR"]
-                                ], $dataToSave);
+                  $sppbSave = Sppb::updateOrCreate([
+                                    'CAR' => $sppb["HEADER"]["CAR"]
+                                  ], $dataToSave);
+                }
+                $p += $c;
               }
               
             }            
@@ -1033,22 +1116,21 @@ class SchedulerController extends Controller
           
           DB::commit();
 
-          $log->update(['info' => 'COMPLETE']);
+          $log->update(['info' => ($p > 0) ? 'COMPLETE' : 'CANCELLED']);
 
           DB::commit();
 
           echo "Fetch Permit Complete.";
 
         } else {
+          \Log::warning($response);
           return $this->updatePermit();
         }
 
       } catch (\SoapFault $fault) {
         DB::rollback();
 
-        $this->createLog(NULL, NULL, 'GetImporPermit_FASP', NULL, NULL, 'FAILED : '.$fault->getMessage());
-
-        DB::commit();
+        \Log::error($fault);
 
         echo 'Request : <br/><xmp>',
                 $soap->__getLastRequest(),
@@ -1074,8 +1156,8 @@ class SchedulerController extends Controller
           ));
           
         $LastRequest =  $soap->__getLastRequest();
-        $soapResponse = $soap->__getLastResponse();
-        
+        $soapResponse = $soap->__getLastResponse();        
+
         $response = $sh->getResults('GetBC23Permit_FASPResult', $soapResponse);
 
         if ($response != ''
@@ -1094,25 +1176,35 @@ class SchedulerController extends Controller
           $res = simplexml_load_string($hasil);
           $json = json_encode($res);
           $data = json_decode($json, TRUE);
-
+          $p = 0;
           foreach($data as $d){
             if(array_key_exists('HEADER', $d)){
-              $this->updateBc($d, 'Scheduler');
-  
-              $dataToSave = $this->getDataBC23($d);
+              $c = $this->updateBc($d, 'Scheduler');
+              if($c > 0)
+              {
+                $dataToSave = $this->getDataBC23($d);
 
-              $sppbSave = Sppb::updateOrCreate([
-                                'CAR' => $d["HEADER"]["CAR"]
-                              ], $dataToSave);
+                $sppbSave = Sppb::updateOrCreate([
+                                  'CAR' => $d["HEADER"]["CAR"]
+                                ], $dataToSave);
+              } else {
+                $this->sendToTPS($soapResponse, 'BC23');
+              }
+              $p += $c;
             } else {
               foreach($d as $sppb){
-                $this->updateBc($sppb, 'Scheduler');
+                $c = $this->updateBc($sppb, 'Scheduler');
+                if($c > 0)
+                {
+                  $dataToSave = $this->getDataBC23($sppb);
   
-                $dataToSave = $this->getDataBC23($sppb);
-  
-                $sppbSave = Sppb::updateOrCreate([
-                                  'CAR' => $sppb["HEADER"]["CAR"]
-                                ], $dataToSave);
+                  $sppbSave = Sppb::updateOrCreate([
+                                    'CAR' => $sppb["HEADER"]["CAR"]
+                                  ], $dataToSave);
+                } else {
+                  $this->sendToTPS($soapResponse, 'BC23');
+                }
+                $p += $c;
               }
             }
 
@@ -1120,22 +1212,22 @@ class SchedulerController extends Controller
 
           DB::commit();
 
-          $log->update(['info' => 'COMPLETE']);
+          $log->update(['info' => ($p > 0) ? 'COMPLETE' : 'CANCELLED']);
 
           DB::commit();
 
           echo "Fetch Permit Complete.";
 
         } else {
+          \Log::warning($response);
+          echo $response;
           return $this->updatePermitBc();
         }
 
       } catch (\SoapFault $fault) {
         DB::rollback();
 
-        $this->createLog(NULL, NULL, 'GetBC23Permit_FASP', NULL, NULL, 'FAILED : '.$fault->getMessage());
-
-        DB::commit();
+        \Log::error($fault);
 
         echo 'Request : <br/><xmp>',
                 $soap->__getLastRequest(),
@@ -1182,47 +1274,52 @@ class SchedulerController extends Controller
           $res = simplexml_load_string($hasil);
           $json = json_encode($res);
           $data = json_decode($json, TRUE);
-
+          $p = 0;
           foreach($data as $d){
             if(array_key_exists('HEADER', $d)){
-              $this->updateBc16($d, 'Scheduler');
-  
-              $dataToSave = $this->getDataBC16($d);
+              $c = $this->updateBc16($d, 'Scheduler');
+              if($c > 0)
+              {
+                $dataToSave = $this->getDataBC16($d);
 
-              $sppbSave = Sppb::updateOrCreate([
+                $sppbSave = Sppb::updateOrCreate([
                                 'CAR' => $d["HEADER"]["CAR"]
                               ], $dataToSave);
+              }
+              $p += $c;
             } else {
               foreach($d as $sppb){
-                $this->updateBc16($sppb, 'Scheduler');
+                $c = $this->updateBc16($sppb, 'Scheduler');
+                if($c > 0)
+                {
+                  $dataToSave = $this->getDataBC16($sppb);
   
-                $dataToSave = $this->getDataBC16($sppb);
-  
-                $sppbSave = Sppb::updateOrCreate([
-                                  'CAR' => $sppb["HEADER"]["CAR"]
-                                ], $dataToSave);
+                  $sppbSave = Sppb::updateOrCreate([
+                                    'CAR' => $sppb["HEADER"]["CAR"]
+                                  ], $dataToSave);
+                }
+                $p += $c;
               }
             } 
           }
           
           DB::commit();
 
-          $log->update(['info' => 'COMPLETE']);
+          $log->update(['info' => ($p > 0) ? 'COMPLETE' : 'CANCELLED']);
 
           DB::commit();
 
           echo "Fetch Permit Complete.";
 
         } else {
+          \Log::warning($response);
           return $this->updatePermitBc16();
         }
 
       } catch (\SoapFault $fault) {
         DB::rollback();
 
-        $this->createLog(NULL, NULL, 'GetDokumenPabeanPermit_FASP', NULL, NULL, 'FAILED : '.$fault->getMessage());
-
-        DB::commit();
+        \Log::error($fault);
 
         echo 'Request : <br/><xmp>',
                 $soap->__getLastRequest(),
@@ -1238,6 +1335,245 @@ class SchedulerController extends Controller
       $sh = new SoapHelper;
 
       $soap = $sh->soap();
+    }
+
+    public function getBilling()
+    {
+        $npwp = [
+          // '930976485402000',
+          // '862102258402000',
+          // '018020776017000',
+        ];
+        $moduls = IdModul::whereIn('NPWP', $npwp)->get();
+
+        foreach($moduls as $pjt)
+        {
+          $SENDING_USER = 'BillingKolektif'; //isset($CU->username) ? $CU->username : '';
+          $SENDING_DATE = date('Y-m-d H:i:s');
+          $SOAP_USER = $pjt->User_BarangKiriman;
+          $SOAP_PASS = $pjt->Password_BarangKiriman;
+          $SOAP_SIGN = $pjt->Token_BarangKiriman;
+          $PJT_NPWP = $pjt->NPWP;
+
+          $SOAP_SETTING = [
+            'stream_context'=> stream_context_create([
+              'ssl'=> [
+                'verify_peer'=>false,
+                'verify_peer_name'=>false, 
+                'allow_self_signed' => true 
+              ]
+            ]),
+          ];
+
+          $SOAP_URL       = asset('WSBillingKolektif.wsdl');
+          $SOAP_LOCATION  = 'https://esbbcext01.beacukai.go.id:9082/BarangKirimanOnline/WSBillingKolektif.wsdl';
+
+          $webServiceClient = new \SoapClient($SOAP_URL, $SOAP_SETTING);
+          $requestData = [
+            "id" => $SOAP_USER.'^$'.$SOAP_PASS,
+            "npwp" => $PJT_NPWP,            
+            "sign" => $SOAP_SIGN
+          ];
+
+          try {
+            $response = $webServiceClient->getBillingKolektif($requestData);
+            $RESP = isset($response->return) ? $response->return : '';
+            $LastResponse =  $webServiceClient->__getLastResponse();
+            $LastRequest =  $webServiceClient->__getLastRequest();
+
+            $cont = '';
+            $log_folder = date('Y-m-d');
+            $log_fn = 'BILLING_KOLEKTIF_'.date("d-M-Y_His").".txt";
+
+            if(!empty($RESP))
+            {                
+                $cont .= "\n " . date('H:i')."  ".str_replace(array("\r\n", "\n", "\r"),"",$RESP);
+                \Storage::disk('public')->put('/logs/responseBilling/'.$PJT_NPWP.'/'.$log_folder.'/'.$log_fn, $cont);
+
+                \Log::info('Create Response xml /logs/responseBilling/'.$PJT_NPWP.'/'.$log_folder.'/'.$log_fn);            
+            }
+            $A_RESP = base64_encode($RESP);
+            $KolektifDB = array(
+                'XML'   => $A_RESP,
+            );
+
+            if (strlen($A_RESP) > 28) {
+              $billing = BillingLog::create([
+                          'XML' => $A_RESP
+                        ]);
+
+              DB::commit();
+
+              \Log::info('Fetch Billing Success, start compile XML for '.$billing->LogID);
+
+              $newRequest = new \Illuminate\Http\Request();
+              $newRequest->setMethod('GET');
+              $newRequest->merge(['id' => $billing->LogID]);
+
+              $this->billing($newRequest);
+            } else {
+              \Log::warning('Get Billing respon '.$A_RESP);
+            }
+          } catch(\SoapFault $th) {
+            DB::rollback();
+
+            \Log::error($th);
+          }
+
+        } 
+    }
+
+    public function billing(Request $request)
+    {
+      $billing = BillingLog::findOrFail($request->id);
+      $xml = base64_decode($billing->XML);
+      $res = simplexml_load_string($xml);
+      $bConsol = [];
+      DB::beginTransaction();
+      \Log::info('Start Compile Billing id :'.$billing->LogID);
+      try {
+        if(property_exists($res, 'HEADER'))
+        {
+          $k = 0;
+          foreach($res->HEADER as $key => $hdr)
+          {            
+            $BillConsol = [
+              'ID_PEMBERITAHU' => (string)$hdr->ID_PEMBERITAHU,
+              'NO_SPPBMCP_KONSOLIDASI' => (string)$hdr->NO_SPPBMCP_KONSOLIDASI,
+              'TGL_SPPBMCP_KONSOLIDASI' => date('Y-m-d H:i:s',strtotime((string)$hdr->TGL_SPPBMCP_KONSOLIDASI)),
+              'KD_RESPON' => (string)$hdr->KD_RESPON,
+              'KET_RESPON' => (string)$hdr->KET_RESPON,
+              'WK_REKAM' => (string)$hdr->WK_REKAM,
+              'KODE_BILLING' => (string)$hdr->KODE_BILLING,
+              'TGL_BILLING' => date('Y-m-d H:i:s',strtotime((string)$hdr->TGL_BILLING)),
+              'TGL_JT_TEMPO' => date('Y-m-d H:i:s',strtotime((string)$hdr->TGL_JT_TEMPO)),
+              'TOTAL_BILLING' => (string)$hdr->TOTAL_BILLING,
+            ];
+
+            $tgBilling = Carbon::parse($BillConsol['TGL_SPPBMCP_KONSOLIDASI']);
+
+            if($tgBilling->year > 0)
+            {
+              $BillConsol['TGL_BILLING'] = ($BillConsol['TGL_BILLING'] == '1970-01-01 07:00:00') ? $tgBilling->copy()->startOfDay()->format('Y-m-d H:i:s') : $BillConsol['TGL_BILLING'];
+              $BillConsol['TGL_JT_TEMPO'] = ($BillConsol['TGL_JT_TEMPO'] == '1970-01-01 07:00:00') ? $tgBilling->copy()->addDay()->format('Y-m-d') . ' 22:00:00' : $BillConsol['TGL_JT_TEMPO'];
+            }
+
+            $billing->update([
+              'NO_SPPBMCP_KONSOLIDASI' => $BillConsol['NO_SPPBMCP_KONSOLIDASI'],
+              'TGL_SPPBMCP_KONSOLIDASI' => $BillConsol['TGL_SPPBMCP_KONSOLIDASI'],
+              'KD_RESPON' => $BillConsol['KD_RESPON'],
+              'KODE_BILLING' => $BillConsol['KODE_BILLING'],
+              'TGL_BILLING' =>  $BillConsol['TGL_BILLING'],
+              'TGL_JT_TEMPO' => $BillConsol['TGL_JT_TEMPO'],
+            ]);
+
+            $bcToUpdate = Arr::except($BillConsol, ['ID_PEMBERITAHU', 'KODE_BILLING','TGL_BILLING']);
+
+            $billingConsol = BillingConsolidation::updateOrCreate([
+                                'ID_PEMBERITAHU' => $BillConsol['ID_PEMBERITAHU'],
+                                'KODE_BILLING' => $BillConsol['KODE_BILLING'],
+                                'TGL_BILLING' => $BillConsol['TGL_BILLING'],
+                              ], $bcToUpdate);
+
+            $bConsol[$k] = $BillConsol;
+
+            if (property_exists($hdr, 'DETIL_PUNGUTAN')) {
+              foreach ($hdr->DETIL_PUNGUTAN->PUNGUTAN as $Pungutan) {
+                $BillConsolPungutan = [
+                    'BillingID' => $billingConsol->id,
+                    'KD_PUNGUTAN'   => (string)$Pungutan->KD_PUNGUTAN,
+                    'NILAI' => $Pungutan->NILAI,
+                ];
+
+                $billingConsol->details()->updateOrCreate([
+                  'KD_PUNGUTAN' => $BillConsolPungutan['KD_PUNGUTAN']
+                ],[
+                  'NILAI' => $BillConsolPungutan['NILAI']
+                ]);
+
+                $bConsol[$k]['PUNGUTAN'][] = $BillConsolPungutan;              
+              }
+            }
+
+            if (property_exists($hdr, 'DETIL_SPPBMCP')) {
+              foreach ($hdr->DETIL_SPPBMCP->SPPBMCP as $SPPBMCP) {
+                $BillConsolSPPBMCP = [
+                    'BillingID' => $billingConsol->id,
+                    'NO_BARANG' => (string)$SPPBMCP->NO_BARANG,
+                    'TGL_HOUSE_BLAWB' => date('Y-m-d',strtotime((string)$SPPBMCP->TGL_HOUSE_BLAWB)),
+                    'TOTAL_TAGIHAN' => $SPPBMCP->TOTAL_TAGIHAN
+                ];
+
+                $billingConsol->sppbmcp()->updateOrCreate([
+                  'NO_BARANG' => $BillConsolSPPBMCP['NO_BARANG'],
+                  'TGL_HOUSE_BLAWB' => $BillConsolSPPBMCP['TGL_HOUSE_BLAWB'],
+                ],[
+                  'TOTAL_TAGIHAN' => $BillConsolSPPBMCP['TOTAL_TAGIHAN'],
+                ]);
+
+                $bConsol[$k]['SPPBMC'][] = $BillConsolSPPBMCP;
+              }
+            }
+
+            DB::commit();
+
+            $npwp = $billingConsol->ID_PEMBERITAHU;
+
+            $branch = GlbBranch::whereHas('pjt', function($p) use ($npwp){
+                                  return $p->where('NPWP', $npwp);
+                                })
+                                ->first();
+            if($branch)
+            {
+              $billingConsol->update([
+                'BRANCH' => $branch->id
+              ]);
+
+              DB::commit();
+            }
+
+            \Log::info('Create Billing Success, Kode Billing '.$billingConsol->KODE_BILLING);
+            $k++;
+          }
+          echo "Finish create ".$k." Billing";
+        }        
+      } catch (\Throwable $th) {
+        DB::rollback();
+        // throw $th;
+        \Log::error($th);
+        echo $th;
+      }      
+    }
+
+    public function respon()
+    {
+      $exc = [401,403,404,405,408];
+      $houses = House::whereNotNull('BC_201')
+                      ->whereIn('JNS_AJU', [1,2])
+                      ->where(function($hb) use ($exc){
+                        $hb->whereNull('BC_CODE')
+                          ->orWhereNotIn('BC_CODE', $exc);
+                      })
+                      //->where('BRANCH', 2)  Temporary
+                      ->pluck('id')
+                      ->toArray();
+
+      $t = 20;
+      $s = 0;
+      $count = count($houses);
+      \Log::notice('Cron Tarik Respon for '.$count.' Houses.');
+      if($count > 0)
+      {        
+        $barkir = new Barkir;
+        while ($s < $count)
+        {
+          $ids = array_slice($houses, $s, $t);
+          
+          $barkir->mintarespon($ids, 1, 0, false);
+          
+          $s += $t;
+        }
+      }
     }
 
     public function createInXML(House $house, Carbon $time)
@@ -1363,15 +1699,24 @@ class SchedulerController extends Controller
         $tgl = Carbon::parse($house->SCAN_IN_DATE);
       }
 
-      if($house->TPS_GateInREF && $force == false){
-        $ref_num = $house->TPS_GateInREF;
-      } else {
-        $ref_num = getRunning('TPS', 'GATE_IN', $tgl->format('Y-m-d'));
-      }      
-      
       $DocType = '3';//Persetujuan PLP Kode 3 perhatian, sementara 22 paket pos
       $DocNumber = $house->master->PLPNumber;
       $DocDate = date('Ymd', strtotime($house->master->PLPDate));
+
+      if(!$DocNumber || !$DocDate)
+      {
+        return [
+          'status' => "ERROR",
+          'info' => 'Gate In '.$house->NO_BARANG.' failed, NO_DOK_INOUT kosong.'
+        ];
+      }
+
+      if($house->TPS_GateInREF && $force == false){
+        $ref_num = $house->TPS_GateInREF;
+      } else {
+        $ref_run = getRunning('TPS', 'GATE_IN', $tgl->format('Y-m-d'));
+        $ref_num = $house->branch?->CB_WhCode . $ref_run;
+      }
 
       $xmlArray = [
         'COCOKMS' => [
@@ -1382,7 +1727,7 @@ class SchedulerController extends Controller
               'NO_VOY_FLIGHT' => $house->NO_FLIGHT,
               'CALL_SIGN' => '',
               'TGL_TIBA' => $tgl->format('Ymd'),
-              'KD_GUDANG' => config('app.tps.kode_gudang'),
+              'KD_GUDANG' => $house->branch?->CB_WhCode ?? "",
               'REF_NUMBER' => $ref_num
           ],
           'DETIL' => [
@@ -1465,7 +1810,7 @@ class SchedulerController extends Controller
           } else {
             $status = 'ERROR';
             $reason = $this->getResults('CoarriCodeco_KemasanResult', $LastResponse);
-            $info = 'Gate In Failed, Ref No : '.$xmlArray['COCOKMS']['HEADER']['REF_NUMBER'].', Reason : '.$reason; 
+            $info = 'Gate In Failed, Ref No : '.$xmlArray['COCOKMS']['HEADER']['REF_NUMBER'].', Reason : '.$reason;  
           }
 
           $log->update(['info' => $info]);
@@ -1504,6 +1849,11 @@ class SchedulerController extends Controller
           ]);
         }
 
+        return [
+          'status' => 'ERROR',
+          'info' => $fault->getMessage()
+        ];
+
         echo 'Request : <br/><xmp>',
                 $soap->__getLastRequest(),
                 '</xmp><br/><br/> Error Message : <br/>',
@@ -1521,21 +1871,63 @@ class SchedulerController extends Controller
         $tgl = Carbon::parse($house->SCAN_IN_DATE);
       }
 
+      $SPPBNumber = NULL;
+      $SPPBDate   = NULL;
+
+      $noPabean = (!in_array($house->JNS_AJU, [1,2])) ? $house->NO_DAFTAR_PABEAN : '';
+      $tglPabean = (!in_array($house->JNS_AJU, [1,2])) 
+                    ? $house->TGL_DAFTAR_PABEAN 
+                    : $house->TGL_HOUSE_BLAWB;
+
+      if(in_array($house->JNS_AJU, [1,2]) && !$house->SPPBNumber){
+        $house->load(['bclog' => function($l){
+          $l->whereIn('BC_CODE', [401,403,404]);
+        }]);
+
+        if($house->bclog)
+        {
+          foreach($house->bclog as $LOGS)
+          {
+            $R = simplexml_load_string(base64_decode($LOGS->XML));
+            if($LOGS->BC_CODE == 404) {              
+              $SPPBNumber = strlen($R->HEADER->NO_SPPB) > 0 ?$R->HEADER->NO_SPPB:$R->HEADER->NO_PIBK;
+              $SPPBDate = $R->HEADER->TGL_SPPB;
+  
+            } else {
+              $SPPBNumber=$R->HEADER->NO_SPPBMCP;
+              $SPPBDate = $R->HEADER->TGL_SPPBMCP;
+            }
+          }          
+        }
+      } else {
+        $SPPBNumber = ($house->BCF15_Status == "Yes"
+                        ? $house->BCF15_Number
+                        : $house->SPPBNumber);
+        $SPPBDate = ($house->BCF15_Status == "Yes"
+                      ? date('Ymd', strtotime($house->BCF15_Date))
+                      : date('Ymd', strtotime($house->SPPBDate)));
+      }
+
+      $DocNumber = $SPPBNumber;
+
+      $DocDate = $SPPBDate;
+
+      if(!$DocNumber || !$DocDate)
+      {
+        return [
+          'status' => "ERROR",
+          'info' => 'Gate In '.$house->NO_BARANG.' failed, NO_DOK_INOUT kosong.'
+        ];
+      }
+
       if($house->TPS_GateOutREF && $force == false){
         $ref_num = $house->TPS_GateOutREF;
       } else {
-        $ref_num = getRunning('TPS', 'GATE_OUT', $tgl->format('Y-m-d'));
+        $ref_run = getRunning('TPS', 'GATE_OUT', $tgl->format('Y-m-d'));
+        $ref_num = $house->branch?->CB_WhCode . $ref_run;
       }      
 
-      $DocType = $house->JNS_AJU;
-
-      $DocNumber = ($house->BCF15_Status == "Yes"
-                      ? $house->BCF15_Number
-                      : $house->SPPBNumber);
-
-      $DocDate = ($house->BCF15_Status == "Yes"
-                    ? date('Ymd', strtotime($house->BCF15_Date))
-                    : date('Ymd', strtotime($house->SPPBDate)));
+      $DocType = $house->KD_DOC;
 
       $xmlArray = [
         'COCOKMS' => [
@@ -1546,8 +1938,8 @@ class SchedulerController extends Controller
                 'NO_VOY_FLIGHT' => $house->NO_FLIGHT,
                 'CALL_SIGN' => '',
                 'TGL_TIBA' => $tgl->format('Ymd'),
-                'KD_GUDANG' => config('app.tps.kode_gudang'),
-                'REF_NUMBER' => $ref_num,
+                'KD_GUDANG' => $house->branch?->CB_WhCode ?? "",
+                'REF_NUMBER' => $ref_num
             ],
             'DETIL' => [
               'KMS' => [
@@ -1581,8 +1973,8 @@ class SchedulerController extends Controller
                                   : $house->master->Origin),
                 'PEL_BONGKAR' => $house->master->Destination,
                 'KODE_KANTOR' => '050100',
-                'NO_DAFTAR_PABEAN' => $house->NO_DAFTAR_PABEAN, // NO DAFTAR PABEAN ( NOMOR PIB / BC2.3)
-                'TGL_DAFTAR_PABEAN' => date('Ymd', strtotime($house->TGL_DAFTAR_PABEAN)), // TANGGAL PENDAFTARAN PIB / BC2.3,
+                'NO_DAFTAR_PABEAN' => $noPabean, // NO DAFTAR PABEAN ( NOMOR PIB / BC2.3)
+                'TGL_DAFTAR_PABEAN' => date('Ymd', strtotime($tglPabean)), // TANGGAL PENDAFTARAN PIB / BC2.3,
                 // 'NO_SEGEL_BC' => $house->master->PLPNumber, // JIKA ADA SEGEL WAJIB formatnya
                 // 'TGL_SEGEL_BC' => date('Ymd', strtotime($house->master->PLPDate)), // jika ada segel wajib yyyymmdd,
                 // 'NO_IJIN_TPS' => $house->NO_BARANG,
@@ -1631,9 +2023,23 @@ class SchedulerController extends Controller
               'TPS_GateOutStatus' => 'Y',
               'TPS_GateOutDateTime' => date("Y-m-d H:i:s"),
               'TPS_GateOutREF' => $xmlArray['COCOKMS']['HEADER']['REF_NUMBER'],
-              'BC_CODE' => '408',
+              'BC_CODE' => 408,
               'BC_STATUS' => 'BARANG KELUAR DARI GUDANG'
             ]);
+            
+            $house->bclog()->updateOrCreate([
+              'BC_CODE' => 408
+            ],[
+              'MAWB' => $house->mawb_parse,
+              'BC_TEXT' => 'BARANG KELUAR DARI GUDANG',
+              'METHOD' => 'CoarriCodeco_Kemasan',
+              'XML' => NULL,
+              'BC_DATE' => $house->SCAN_OUT_DATE,
+              'SENTON' => now(),
+              'SENTBY' => 'Scheduler',
+              'NO_BARANG' => $house->NO_BARANG
+            ]);
+
           } else {
             $status = 'ERROR';
             $reason = $this->getResults('CoarriCodeco_KemasanResult', $LastResponse);
@@ -1676,6 +2082,11 @@ class SchedulerController extends Controller
           ]);
         }
 
+        return [
+          'status' => 'ERROR',
+          'info' => $fault->getMessage()
+        ];
+
         echo 'Request : <br/><xmp>',
                 $soap->__getLastRequest(),
                 '</xmp><br/><br/> Error Message : <br/>',
@@ -1696,7 +2107,7 @@ class SchedulerController extends Controller
 
         foreach($logs as $log){
           $soapResponse = $log->response;
-
+          \Log::info('Process Scheduler Log '.$log->id);
           $response = $sh->getResults('GetImporPermit_FASPResult', $soapResponse);
           $strResult = preg_replace("/(<\/?)(\w+):([^>]*>)/", "$1$2$3", $response);
           $hasil = Str::replace('&lt;', '<', Str::replace('&gt;', '>', $strResult));
@@ -1708,45 +2119,50 @@ class SchedulerController extends Controller
             DB::beginTransaction();
 
             try {
-
+              $p = 0;
               foreach($data as $d){
                 if(array_key_exists('HEADER', $d)){
-                  $this->updatePib($d, 'Scheduler');
-      
-                  $dataToSave = $this->getDataPIB($d);
+                  $c = $this->updatePib($d, 'Scheduler');
+                  if($c > 0)
+                  {
+                    $dataToSave = $this->getDataPIB($d);
     
-                  $sppbSave = Sppb::updateOrCreate([
-                                    'CAR' => $d["HEADER"]["CAR"]
-                                  ], $dataToSave);
+                    $sppbSave = Sppb::updateOrCreate([
+                                      'CAR' => $d["HEADER"]["CAR"]
+                                    ], $dataToSave);
+                  }
+                  $p += $c;
                 } else {
                   foreach($d as $sppb){
-                    $this->updatePib($sppb, 'Scheduler');
+                    $c = $this->updatePib($sppb, 'Scheduler');
+                    if($c > 0)
+                    {
+                      $dataToSave = $this->getDataPIB($sppb);
       
-                    $dataToSave = $this->getDataPIB($sppb);
-      
-                    $sppbSave = Sppb::updateOrCreate([
-                                      'CAR' => $sppb["HEADER"]["CAR"]
-                                    ], $dataToSave);
+                      $sppbSave = Sppb::updateOrCreate([
+                                        'CAR' => $sppb["HEADER"]["CAR"]
+                                      ], $dataToSave);
+                    }
+                    $p += $c;
                   }
                 } 
               }              
     
               DB::commit();
-    
-              $log->update(['info' => 'COMPLETE']);
+              
+              $log->update(['info' => ($p > 0) ? 'COMPLETE' : 'CANCELLED']);
     
               DB::commit();
 
               echo 'Update Permit Success';
-
+              \Log::info('Update Permit Success');
             } catch (\Throwable $th) {
-              echo "Update Permit Error : ".$th->getMessage();
+              // throw $th;
+              DB::rollback();
+              \Log::error($th);
+              echo "Update Permit Error : ".$log->id."-".$th->getMessage();
             }
-            
-
             echo "Fetch Permit Complete.";
-
-            
           } else {
             DB::beginTransaction();
 
@@ -1760,12 +2176,10 @@ class SchedulerController extends Controller
 
             } catch (\Throwable $th) {
               DB::rollback();
-
-              echo 'Update Permit Error, Message: '.$th->getMessage();
+              \Log::error($th);
+              echo "Update Permit Error : ".$log->id."-".$th->getMessage();
             }
-          }
-
-          sleep(1);          
+          }    
         }
     }
 
@@ -1781,11 +2195,12 @@ class SchedulerController extends Controller
 
         foreach($logs as $log){
           $soapResponse = $log->response;
-
+          \Log::info('Process Scheduler Log '.$log->id);
           $response = $sh->getResults('GetBC23Permit_FASPResult', $soapResponse);
           $strResult = preg_replace("/(<\/?)(\w+):([^>]*>)/", "$1$2$3", $response);
           $hasil = Str::replace('&lt;', '<', Str::replace('&gt;', '>', $strResult));
           if(strpos($hasil, 'DOCUMENT')){
+            // $sppb = $sh->getResults('DOCUMENT', $hasil);
             $res = simplexml_load_string($hasil);
             $json = json_encode($res);
             $data = json_decode($json, TRUE);
@@ -1793,41 +2208,49 @@ class SchedulerController extends Controller
             DB::beginTransaction();
   
             try {
+              $p = 0;
               foreach($data as $d){
                 if(array_key_exists('HEADER', $d)){
-                  $this->updateBc($d, 'Scheduler');
-      
-                  $dataToSave = $this->getDataBC23($d);
+                  $c = $this->updateBc($d, 'Scheduler');
+                  if($c > 0)
+                  {
+                    $dataToSave = $this->getDataBC23($d);
     
-                  $sppbSave = Sppb::updateOrCreate([
-                                    'CAR' => $d["HEADER"]["CAR"]
-                                  ], $dataToSave);
+                    $sppbSave = Sppb::updateOrCreate([
+                                      'CAR' => $d["HEADER"]["CAR"]
+                                    ], $dataToSave);
+                  }
+                  $p += $c;
                 } else {
                   foreach($d as $sppb){
-                    $this->updateBc($sppb, 'Scheduler');
+                    $c = $this->updateBc($sppb, 'Scheduler');
+                    if($c > 0)
+                    {
+                      $dataToSave = $this->getDataBC23($sppb);
       
-                    $dataToSave = $this->getDataBC23($sppb);
-      
-                    $sppbSave = Sppb::updateOrCreate([
-                                      'CAR' => $sppb["HEADER"]["CAR"]
-                                    ], $dataToSave);
+                      $sppbSave = Sppb::updateOrCreate([
+                                        'CAR' => $sppb["HEADER"]["CAR"]
+                                      ], $dataToSave);
+                    }
+                    $p += $c;
                   }
                 }
               }
     
               DB::commit();
     
-              $log->update(['info' => 'COMPLETE']);
+              $log->update(['info' => ($p > 0) ? 'COMPLETE' : 'CANCELLED']);
     
               DB::commit();
 
               echo "Update Permit Success";
   
             } catch (\Throwable $th) {
-              echo "Update Permit Error : ".$th->getMessage();
-            }
-            
-  
+              // throw $th;
+              DB::rollback();
+              \Log::error($th);
+              echo "Update Permit Error : ".$log->id."-".$th->getMessage();
+            }  
             echo "Fetch Permit Complete.";
           } else {
             DB::beginTransaction();
@@ -1842,12 +2265,10 @@ class SchedulerController extends Controller
 
             } catch (\Throwable $th) {
               DB::rollback();
-
-              echo 'Update Permit Error, Message: '.$th->getMessage();
+              \Log::error($th);
+              echo "Update Permit Error : ".$log->id."-".$th->getMessage();
             }
-          }          
-
-          sleep(1);
+          }
         }
     }
 
@@ -1863,7 +2284,7 @@ class SchedulerController extends Controller
 
         foreach($logs as $log){
           $soapResponse = $log->response;
-
+          \Log::info('Process Scheduler Log '.$log->id);
           $response = $sh->getResults('GetDokumenPabeanPermit_FASPResult', $soapResponse);
           $strResult = preg_replace("/(<\/?)(\w+):([^>]*>)/", "$1$2$3", $response);
           $hasil = Str::replace('&lt;', '<', Str::replace('&gt;', '>', $strResult));
@@ -1875,38 +2296,48 @@ class SchedulerController extends Controller
             DB::beginTransaction();
   
             try {
+              $p = 0;
               foreach($data as $d){
                 if(array_key_exists('HEADER', $d)){
-                  $this->updateBc16($d, 'Scheduler');
-      
-                  $dataToSave = $this->getDataBC16($d);
+                  $c = $this->updateBc16($d, 'Scheduler');
+                  if($c > 0)
+                  {
+                    $dataToSave = $this->getDataBC16($d);
     
-                  $sppbSave = Sppb::updateOrCreate([
-                                    'CAR' => $d["HEADER"]["CAR"]
-                                  ], $dataToSave);
+                    $sppbSave = Sppb::updateOrCreate([
+                                      'CAR' => $d["HEADER"]["CAR"]
+                                    ], $dataToSave);
+                  }
+                  $p += $c;
                 } else {
                   foreach($d as $sppb){
-                    $this->updateBc16($sppb, 'Scheduler');
+                    $c = $this->updateBc16($sppb, 'Scheduler');
+                    if($c > 0)
+                    {
+                      $dataToSave = $this->getDataBC16($sppb);
       
-                    $dataToSave = $this->getDataBC16($sppb);
-      
-                    $sppbSave = Sppb::updateOrCreate([
-                                      'CAR' => $sppb["HEADER"]["CAR"]
-                                    ], $dataToSave);
+                      $sppbSave = Sppb::updateOrCreate([
+                                        'CAR' => $sppb["HEADER"]["CAR"]
+                                      ], $dataToSave);
+                    }
+                    $p += $c;
                   }
                 }
               }
     
               DB::commit();
     
-              $log->update(['info' => 'COMPLETE']);
+              $log->update(['info' => ($p > 0) ? 'COMPLETE' : 'CANCELLED']);
     
               DB::commit();
 
               echo "Fetch Permit Complete.";
   
             } catch (\Throwable $th) {
-              echo "Update Permit Error : ".$th->getMessage();
+              // throw $th;
+              DB::rollback();
+              \Log::error($th);
+              echo "Update Permit Error : ".$log->id."-".$th->getMessage();
             }
 
           } else {
@@ -1922,52 +2353,85 @@ class SchedulerController extends Controller
 
             } catch (\Throwable $th) {
               DB::rollback();
-
-              echo 'Update Permit Error, Message: '.$th->getMessage();
+              \Log::error($th);
+              echo "Update Permit Error : ".$log->id."-".$th->getMessage();
             }
-          }          
-
-          sleep(1);
+          }
         }
     }
 
     public function updatePib($data, $from = NULL)
     {
+        if(is_array($data['HEADER']['NO_BL_AWB']) || is_array($data['HEADER']['TG_BL_AWB']))
+        {
+          return 0;
+        }
         $houses = House::where('NO_HOUSE_BLAWB', $data['HEADER']['NO_BL_AWB'])
                       ->where('TGL_HOUSE_BLAWB', date('Y-m-d', strtotime($data['HEADER']['TG_BL_AWB'])))
+                      ->whereNotIn('JNS_AJU', [1,2])
+                      ->whereNull('SCAN_OUT_DATE')
                       ->get();
+        $count = count($houses);
+        if($houses->isNotEmpty())
+        {
+          foreach($houses as $house){
+            $bccode = $house->BC_CODE ?? '401';
+  
+            $house->update([
+              'KD_DOC' => 1,
+              'SPPBNumber' => $data['HEADER']['NO_SPPB'],
+              'SPPBDate' => date('Y-m-d', strtotime($data["HEADER"]["TGL_SPPB"])),
+              'NO_SPPB' => $data['HEADER']['NO_SPPB'],
+              'TGL_SPPB' => date('Y-m-d', strtotime($data["HEADER"]["TGL_SPPB"])),
+              'NO_DAFTAR_PABEAN' => $data['HEADER']['NO_PIB'],
+              'TGL_DAFTAR_PABEAN' => date('Y-m-d', strtotime($data["HEADER"]["TGL_PIB"])),
+              'BC_CODE' => $bccode,
+              'BC_STATUS' => 'SPPB PIB No. '.$data['HEADER']['NO_SPPB'].' TGL : '.date('Y-m-d', strtotime($data["HEADER"]["TGL_SPPB"])).' AJU : '.$data['HEADER']['CAR'],
+              'BC_DATE' => now(),
+              'BC_401_DATE' => now(),
+            ]);
+            $house->master->update([
+              'CAR' => $data['HEADER']['CAR'],
+            ]);
+            createLog('App\Models\House', $house->id, 'Update SPPB '. $house->NO_BARANG . ' to '. $data['HEADER']['NO_SPPB']);
 
-        foreach($houses as $house){
-          $bccode = $house->BC_CODE ?? '401';
-
-          $house->update([
-            'JNS_AJU' => 1,
-            'SPPBNumber' => $data['HEADER']['NO_SPPB'],
-            'SPPBDate' => date('Y-m-d', strtotime($data["HEADER"]["TGL_SPPB"])),
-            'NO_SPPB' => $data['HEADER']['NO_SPPB'],
-            'TGL_SPPB' => date('Y-m-d', strtotime($data["HEADER"]["TGL_SPPB"])),
-            'NO_DAFTAR_PABEAN' => $data['HEADER']['NO_PIB'],
-            'TGL_DAFTAR_PABEAN' => date('Y-m-d', strtotime($data["HEADER"]["TGL_PIB"])),
-            'BC_CODE' => $bccode,
-            'BC_STATUS' => 'SPPB PIB No. '.$data['HEADER']['NO_SPPB'].' TGL : '.date('Y-m-d', strtotime($data["HEADER"]["TGL_SPPB"])).' AJU : '.$data['HEADER']['CAR'],
-          ]);
-          $house->master->update([
-            'CAR' => $data['HEADER']['CAR'],
-          ]);
-          createLog('App\Models\House', $house->id, 'Update SPPB '. $house->NO_BARANG . ' to '. $data['HEADER']['NO_SPPB']);
+            if($house->kerry)
+            {
+              $kerry = $house->kerry;
+              
+              $kerry->logs()->updateOrCreate([
+                'STATUS' => 'I2210.01',
+                'BC_CODE' => 401,
+              ],[                  
+                'BC_DATE' => now()->format('Y-m-d H:i:s'),
+                'Remarks' => 'approval to issued sppbmcp / customs clearance completed (waiting payment from cnee if ddu)'
+              ]);
+              \Log::info('Created I2210.01 for '.$house->NO_BARANG.' Completed.');
+            }
+          }
         }
+
+        return $count;
     }
 
     public function updateBc($data, $from = NULL)
     {
-        $houses = House::where('NO_BARANG', $data['HEADER']['NO_BL_AWB'])
-                      ->where('TGL_HOUSE_BLAWB', date('Y-m-d', strtotime($data['HEADER']['TGL_BL_AWB'])))
-                      ->get();
-
+      if(is_array($data['HEADER']['NO_BL_AWB']) || is_array($data['HEADER']['TGL_BL_AWB']))
+      {
+        return 0;
+      }
+      $houses = House::where('NO_BARANG', $data['HEADER']['NO_BL_AWB'])
+                    ->where('TGL_HOUSE_BLAWB', date('Y-m-d', strtotime($data['HEADER']['TGL_BL_AWB'])))
+                    ->whereNotIn('JNS_AJU', [1,2])
+                    ->whereNull('SCAN_OUT_DATE')
+                    ->get();
+      $count = count($houses);
+      if($houses->isNotEmpty())
+      {
         foreach($houses as $house){
           $bccode = $house->BC_CODE ?? '401';
           $house->update([
-            'JNS_AJU' => 2,
+            'KD_DOC' => 2,
             'SPPBNumber' => $data['HEADER']['NO_SPPB'],
             'SPPBDate' => date('Y-m-d', strtotime($data["HEADER"]["TGL_SPPB"])),
             'NO_SPPB' => $data['HEADER']['NO_SPPB'],
@@ -1976,7 +2440,8 @@ class SchedulerController extends Controller
             'TGL_DAFTAR_PABEAN' => date('Y-m-d', strtotime($data["HEADER"]["TGL_PIB"])),
             'BC_CODE' => '401',
             'BC_STATUS' => 'SPPB BC23 No. '.$data['HEADER']['NO_SPPB'].' TGL : '.date('Y-m-d', strtotime($data["HEADER"]["TGL_SPPB"])).' AJU : '.$data['HEADER']['CAR'],
-            'BC_DATE' => date('Y-m-d', strtotime($data["HEADER"]["TGL_SPPB"])),
+            'BC_DATE' => now(),
+            'BC_401_DATE' => now(),
           ]);
 
           $house->master->update([
@@ -1984,33 +2449,77 @@ class SchedulerController extends Controller
           ]);
 
           createLog('App\Models\House', $house->id, 'Update SPPB '. $house->NO_BARANG . ' to '. $data['HEADER']['NO_SPPB']);
+
+          if($house->kerry)
+          {
+            $kerry = $house->kerry;
+            
+            $kerry->logs()->updateOrCreate([
+              'STATUS' => 'I2210.01',
+              'BC_CODE' => 401,
+            ],[                  
+              'BC_DATE' => now()->format('Y-m-d H:i:s'),
+              'Remarks' => 'approval to issued sppbmcp / customs clearance completed (waiting payment from cnee if ddu)'
+            ]);
+            \Log::info('Created I2210.01 for '.$house->NO_BARANG.' Completed.');
+          }
+          echo "Update Permit ".$house->NO_BARANG." Completed.";
         }
+      }
+      
+      return $count;
     }
 
     public function updateBc16($data, $from = NULL)
     {
-        $houses = House::where('NO_BARANG', $data['HEADER']['NO_BL_AWB'])
-                        ->where('TGL_HOUSE_BLAWB', date('Y-m-d', strtotime($data['HEADER']['TGL_BL_AWB'])))
-                      ->get();
-
+      if(is_array($data['HEADER']['NO_BL_AWB']) || is_array($data['HEADER']['TGL_BL_AWB']))
+      {
+        return 0;
+      }
+      $houses = House::where('NO_BARANG', $data['HEADER']['NO_BL_AWB'])
+                      ->where('TGL_HOUSE_BLAWB', date('Y-m-d', strtotime($data['HEADER']['TGL_BL_AWB'])))
+                      ->whereNotIn('JNS_AJU', [1,2])
+                      ->whereNull('SCAN_OUT_DATE')
+                    ->get();
+      $count = count($houses);
+      if($houses->isNotEmpty())
+      {
         foreach($houses as $house){
           $bccode = $house->BC_CODE ?? '401';
           $house->update([
-            'JNS_AJU' => 41,
+            'KD_DOC' => 41,
             'SPPBNumber' => $data['HEADER']['NO_DOK_INOUT'],
             'SPPBDate' => date('Y-m-d', strtotime($data["HEADER"]["TGL_DOK_INOUT"])),
             'NO_SPPB' => $data['HEADER']['NO_DOK_INOUT'],
             'TGL_SPPB' => date('Y-m-d', strtotime($data["HEADER"]["TGL_DOK_INOUT"])),
             'NO_DAFTAR_PABEAN' => $data['HEADER']['NO_DAFTAR'],
-            'TGL_DAFTAR_PABEAN' => date('Y-m-d', strtotime($data["HEADER"]["TGL_DAFTAR"])),
+            'TGL_DAFTAR_PABEAN' => (!is_array($data["HEADER"]["TGL_DAFTAR"])) ? date('Y-m-d', strtotime($data["HEADER"]["TGL_DAFTAR"])) : NULL,
             'BC_CODE' => '401',
             'BC_STATUS' => 'SPPB BC 1.6 No. '.$data['HEADER']['NO_DOK_INOUT'].' TGL : '.date('Y-m-d', strtotime($data["HEADER"]["TGL_DOK_INOUT"])).' AJU : '.$data['HEADER']['CAR'],
+            'BC_DATE' => now(),
+            'BC_401_DATE' => now(),
           ]);
           $house->master->update([
             'CAR' => $data['HEADER']['CAR'],
           ]);
-          createLog('App\Models\House', $house->id, 'Update SPPB '. $house->NO_BARANG . ' to '. $data['HEADER']['NO_SPPB']);
+          createLog('App\Models\House', $house->id, 'Update SPPB '. $house->NO_BARANG . ' to '. $data['HEADER']['NO_DOK_INOUT']);
+
+          if($house->kerry)
+          {
+            $kerry = $house->kerry;
+            
+            $kerry->logs()->updateOrCreate([
+              'STATUS' => 'I2210.01',
+              'BC_CODE' => 401,
+            ],[                  
+              'BC_DATE' => now()->format('Y-m-d H:i:s'),
+              'Remarks' => 'approval to issued sppbmcp / customs clearance completed (waiting payment from cnee if ddu)'
+            ]);
+            \Log::info('Created I2210.01 for '.$house->NO_BARANG.' Completed.');
+          }
         }
+      }
+      return $count;
     }
 
     public function updatePlp($data, $from = NULL)
@@ -2065,6 +2574,7 @@ class SchedulerController extends Controller
     public function getDataPIB(array $sppb)
     {
         $data = [
+          // 'CAR' => $sppb["HEADER"]["CAR"],
           'NO_SPPB' => $sppb["HEADER"]["NO_SPPB"],
           'TGL_SPPB' => date('Y-m-d', strtotime($sppb["HEADER"]["TGL_SPPB"])),
           'KD_KPBC' => $sppb["HEADER"]["KD_KPBC"],
@@ -2075,25 +2585,25 @@ class SchedulerController extends Controller
           'NPWP_IMP' => $sppb["HEADER"]["NPWP_IMP"],
           'NAMA_IMP' => $sppb["HEADER"]["NAMA_IMP"],
           'ALAMAT_IMP' => $sppb["HEADER"]["ALAMAT_IMP"],
-          'NPWP_PPJK' => (is_array($sppb["HEADER"]["NPWP_PPJK"]) ? '' : $sppb["HEADER"]["NPWP_PPJK"]),
-          'NAMA_PPJK' => (is_array($sppb["HEADER"]["NAMA_PPJK"]) ? '' : $sppb["HEADER"]["NAMA_PPJK"]),
-          'ALAMAT_PPJK' => (is_array($sppb["HEADER"]["ALAMAT_PPJK"]) ? '' : $sppb["HEADER"]["ALAMAT_PPJK"]),
+          'NPWP_PPJK' => (is_array($sppb["HEADER"]["NPWP_PPJK"]) ? NULL : $sppb["HEADER"]["NPWP_PPJK"]),
+          'NAMA_PPJK' => (is_array($sppb["HEADER"]["NAMA_PPJK"]) ? NULL : $sppb["HEADER"]["NAMA_PPJK"]),
+          'ALAMAT_PPJK' => (is_array($sppb["HEADER"]["ALAMAT_PPJK"]) ? NULL : $sppb["HEADER"]["ALAMAT_PPJK"]),
           'NM_ANGKUT' => $sppb["HEADER"]["NM_ANGKUT"],
           'NO_VOY_FLIGHT' => $sppb["HEADER"]["NO_VOY_FLIGHT"],
           'BRUTO' => $sppb["HEADER"]["BRUTO"],
           'NETTO' => $sppb["HEADER"]["NETTO"],
           'GUDANG' => $sppb["HEADER"]["GUDANG"],
           'STATUS_JALUR' => $sppb["HEADER"]["STATUS_JALUR"],
-          'JML_CONT' => (is_array($sppb["HEADER"]["JML_CONT"]) ? '' : $sppb["HEADER"]["JML_CONT"]),
-          'NO_BC11' => $sppb["HEADER"]["NO_BC11"],
-          'TGL_BC11' => date('Y-m-d', strtotime($sppb["HEADER"]["TGL_BC11"])),
-          'NO_POS_BC11' => $sppb["HEADER"]["NO_POS_BC11"],
-          'NO_BL_AWB' => $sppb["HEADER"]["NO_BL_AWB"],
-          'TGL_BL_AWB' => date('Y-m-d', strtotime($sppb["HEADER"]["TG_BL_AWB"])),
-          'NO_MASTER_BL_AWB' => $sppb["HEADER"]["NO_MASTER_BL_AWB"],
-          'TGL_MASTER_BL_AWB' => date('Y-m-d', strtotime($sppb["HEADER"]["TG_MASTER_BL_AWB"])),
-          'JNS_KMS' => (is_array($sppb["DETIL"]["KMS"]["JNS_KMS"]) ? "" : $sppb["DETIL"]["KMS"]["JNS_KMS"]),
-          'MERK_KMS' => (is_array($sppb["DETIL"]["KMS"]["MERK_KMS"]) ? "" : $sppb["DETIL"]["KMS"]["MERK_KMS"]),
+          'JML_CONT' => (is_array($sppb["HEADER"]["JML_CONT"]) ? NULL : $sppb["HEADER"]["JML_CONT"]),
+          'NO_BC11' => (is_array($sppb["HEADER"]["NO_BC11"])) ? NULL : $sppb["HEADER"]["NO_BC11"],
+          'TGL_BC11' => (is_array($sppb["HEADER"]["TGL_BC11"])) ? NULL : date('Y-m-d', strtotime($sppb["HEADER"]["TGL_BC11"])),
+          'NO_POS_BC11' => (is_array($sppb["HEADER"]["NO_POS_BC11"])) ? NULL : $sppb["HEADER"]["NO_POS_BC11"],
+          'NO_BL_AWB' => (is_array($sppb["HEADER"]["NO_BL_AWB"])) ? NULL : $sppb["HEADER"]["NO_BL_AWB"],
+          'TGL_BL_AWB' =>(is_array($sppb["HEADER"]["TG_BL_AWB"])) ? NULL : date('Y-m-d', strtotime($sppb["HEADER"]["TG_BL_AWB"])),
+          'NO_MASTER_BL_AWB' => (is_array($sppb["HEADER"]["NO_MASTER_BL_AWB"])) ? NULL : $sppb["HEADER"]["NO_MASTER_BL_AWB"],
+          'TGL_MASTER_BL_AWB' =>(is_array($sppb["HEADER"]["TG_MASTER_BL_AWB"])) ? NULL : date('Y-m-d', strtotime($sppb["HEADER"]["TG_MASTER_BL_AWB"])),
+          'JNS_KMS' => (is_array($sppb["DETIL"]["KMS"]["JNS_KMS"]) ? NULL : $sppb["DETIL"]["KMS"]["JNS_KMS"]),
+          'MERK_KMS' => (is_array($sppb["DETIL"]["KMS"]["MERK_KMS"]) ? NULL : $sppb["DETIL"]["KMS"]["MERK_KMS"]),
           'JML_KMS' => $sppb["DETIL"]["KMS"]["JML_KMS"],
         ];
 
@@ -2103,6 +2613,7 @@ class SchedulerController extends Controller
     public function getDataBC23(array $sppb)
     {
       $data = [
+        // 'CAR' => $sppb["HEADER"]["CAR"],
         'NO_SPPB' => $sppb["HEADER"]["NO_SPPB"],
         'TGL_SPPB' => date('Y-m-d', strtotime($sppb["HEADER"]["TGL_SPPB"])),
         'KD_KPBC' => $sppb["HEADER"]["KD_KANTOR_PENGAWAS"],
@@ -2113,27 +2624,34 @@ class SchedulerController extends Controller
         'NPWP_IMP' => $sppb["HEADER"]["NPWP_IMP"],
         'NAMA_IMP' => $sppb["HEADER"]["NAMA_IMP"],
         'ALAMAT_IMP' => $sppb["HEADER"]["ALAMAT_IMP"],
-        'NPWP_PPJK' => (is_array($sppb["HEADER"]["NPWP_PPJK"]) ? '' : $sppb["HEADER"]["NPWP_PPJK"]),
-        'NAMA_PPJK' => (is_array($sppb["HEADER"]["NAMA_PPJK"]) ? '' : $sppb["HEADER"]["NAMA_PPJK"]),
-        'ALAMAT_PPJK' => (is_array($sppb["HEADER"]["ALAMAT_PPJK"]) ? '' : $sppb["HEADER"]["ALAMAT_PPJK"]),
+        'NPWP_PPJK' => (is_array($sppb["HEADER"]["NPWP_PPJK"]) ? NULL : $sppb["HEADER"]["NPWP_PPJK"]),
+        'NAMA_PPJK' => (is_array($sppb["HEADER"]["NAMA_PPJK"]) ? NULL : $sppb["HEADER"]["NAMA_PPJK"]),
+        'ALAMAT_PPJK' => (is_array($sppb["HEADER"]["ALAMAT_PPJK"]) ? NULL : $sppb["HEADER"]["ALAMAT_PPJK"]),
         'NM_ANGKUT' => $sppb["HEADER"]["NM_ANGKUT"],
         'NO_VOY_FLIGHT' => $sppb["HEADER"]["NO_VOY_FLIGHT"],
         'BRUTO' => $sppb["HEADER"]["BRUTTO"],
         'NETTO' => $sppb["HEADER"]["NETTO"],
         'GUDANG' => $sppb["HEADER"]["GUDANG"],
-        'STATUS_JALUR' => (is_array($sppb["HEADER"]["STATUS_JALUR"]) ? '' : $sppb["HEADER"]["STATUS_JALUR"]),
-        'JML_CONT' => (is_array($sppb["HEADER"]["JML_CONT"]) ? '' : $sppb["HEADER"]["JML_CONT"]),
-        'NO_BC11' => $sppb["HEADER"]["NO_BC11"],
-        'TGL_BC11' => date('Y-m-d', strtotime($sppb["HEADER"]["TGL_BC11"])),
+        'STATUS_JALUR' => (is_array($sppb["HEADER"]["STATUS_JALUR"]) ? NULL : $sppb["HEADER"]["STATUS_JALUR"]),
+        'JML_CONT' => (is_array($sppb["HEADER"]["JML_CONT"]) ? NULL : $sppb["HEADER"]["JML_CONT"]),
+        'NO_BC11' => (is_array($sppb["HEADER"]["NO_BC11"])) ? NULL : $sppb["HEADER"]["NO_BC11"],
+        'TGL_BC11' => (!is_array($sppb["HEADER"]["TGL_BC11"])) ? date('Y-m-d', strtotime($sppb["HEADER"]["TGL_BC11"])) : NULL,
         'NO_POS_BC11' => $sppb["HEADER"]["NO_POS_BC11"],
-        'NO_BL_AWB' => $sppb["HEADER"]["NO_BL_AWB"],
-        'TGL_BL_AWB' => date('Y-m-d', strtotime($sppb["HEADER"]["TGL_BL_AWB"])),
-        'NO_MASTER_BL_AWB' => $sppb["HEADER"]["NO_MASTER_BL_AWB"],
-        'TGL_MASTER_BL_AWB' => date('Y-m-d', strtotime($sppb["HEADER"]["TGL_MASTER_BL_AWB"])),
-        'JNS_KMS' => (is_array($sppb["DETIL"]["KMS"]["JNS_KMS"]) ? "" : $sppb["DETIL"]["KMS"]["JNS_KMS"]),
+        'NO_BL_AWB' => (is_array($sppb["HEADER"]["NO_BL_AWB"])) ? NULL : $sppb["HEADER"]["NO_BL_AWB"],
+        'TGL_BL_AWB' => (is_array($sppb["HEADER"]["TGL_BL_AWB"])) ? NULL : date('Y-m-d', strtotime($sppb["HEADER"]["TGL_BL_AWB"])),
+        'NO_MASTER_BL_AWB' => (is_array($sppb["HEADER"]["NO_MASTER_BL_AWB"])) ? NULL : $sppb["HEADER"]["NO_MASTER_BL_AWB"],
+        'TGL_MASTER_BL_AWB' => (is_array($sppb["HEADER"]["TGL_MASTER_BL_AWB"])) ? NULL : date('Y-m-d', strtotime($sppb["HEADER"]["TGL_MASTER_BL_AWB"])),
+        'JNS_KMS' => NULL,
         'MERK_KMS' => NULL,
-        'JML_KMS' => $sppb["DETIL"]["KMS"]["JML_KMS"],
+        'JML_KMS' => NULL,
       ];
+
+      if(array_key_exists('DETIL', $sppb) 
+          && array_key_exists('KMS', $sppb["DETIL"]))
+      {
+        $data['JNS_KMS'] = (is_array($sppb["DETIL"]["KMS"]["JNS_KMS"]) ? NULL : $sppb["DETIL"]["KMS"]["JNS_KMS"]);
+        $data['JML_KMS'] = $sppb["DETIL"]["KMS"]["JML_KMS"];
+      }
 
       return $data;
     }
@@ -2146,32 +2664,39 @@ class SchedulerController extends Controller
         'KD_KPBC' => $sppb["HEADER"]["KD_KANTOR_PENGAWAS"],
         'NO_PIB' => $sppb["HEADER"]["NO_DOK_INOUT"],
         'TGL_PIB' => date('Y-m-d', strtotime($sppb["HEADER"]["TGL_DOK_INOUT"])),
-        'NO_DAFTAR_PABEAN' => $sppb["HEADER"]["NO_DAFTAR"],
-        'TGL_DAFTAR_PABEAN' => date('Y-m-d', strtotime($sppb["HEADER"]["TGL_DAFTAR"])),
+        'NO_DAFTAR_PABEAN' => (is_array($sppb["HEADER"]["NO_DAFTAR"])) ? NULL : $sppb["HEADER"]["NO_DAFTAR"],
+        'TGL_DAFTAR_PABEAN' => (is_array($sppb['HEADER']['TGL_DAFTAR'])) ? NULL : date('Y-m-d', strtotime($sppb["HEADER"]["TGL_DAFTAR"])),
         'NPWP_IMP' => $sppb["HEADER"]["NPWP_IMP"],
         'NAMA_IMP' => $sppb["HEADER"]["NM_IMP"],
         'ALAMAT_IMP' => $sppb["HEADER"]["AL_IMP"],
-        'NPWP_PPJK' => (is_array($sppb["HEADER"]["NPWP_PPJK"]) ? '' : $sppb["HEADER"]["NPWP_PPJK"]),
-        'NAMA_PPJK' => (is_array($sppb["HEADER"]["NM_PPJK"]) ? '' : $sppb["HEADER"]["NM_PPJK"]),
-        'ALAMAT_PPJK' => (is_array($sppb["HEADER"]["AL_PPJK"]) ? '' : $sppb["HEADER"]["AL_PPJK"]),
+        'NPWP_PPJK' => (is_array($sppb["HEADER"]["NPWP_PPJK"]) ? NULL : $sppb["HEADER"]["NPWP_PPJK"]),
+        'NAMA_PPJK' => (is_array($sppb["HEADER"]["NM_PPJK"]) ? NULL : $sppb["HEADER"]["NM_PPJK"]),
+        'ALAMAT_PPJK' => (is_array($sppb["HEADER"]["AL_PPJK"]) ? NULL : $sppb["HEADER"]["AL_PPJK"]),
         'NM_ANGKUT' => $sppb["HEADER"]["NM_ANGKUT"],
         'NO_VOY_FLIGHT' => $sppb["HEADER"]["NO_VOY_FLIGHT"],
         'BRUTO' => $sppb["HEADER"]["BRUTTO"],
         'NETTO' => $sppb["HEADER"]["NETTO"],
         'GUDANG' => $sppb["HEADER"]["GUDANG"],
-        'STATUS_JALUR' => (is_array($sppb["HEADER"]["STATUS_JALUR"])) ? '' : $sppb["HEADER"]["STATUS_JALUR"],
-        'JML_CONT' => (is_array($sppb["HEADER"]["JML_CONT"]) ? '' : $sppb["HEADER"]["JML_CONT"]),
-        'NO_BC11' => $sppb["HEADER"]["NO_BC11"],
-        'TGL_BC11' => date('Y-m-d', strtotime($sppb["HEADER"]["TGL_BC11"])),
+        'STATUS_JALUR' => (is_array($sppb["HEADER"]["STATUS_JALUR"])) ? NULL : $sppb["HEADER"]["STATUS_JALUR"],
+        'JML_CONT' => (is_array($sppb["HEADER"]["JML_CONT"]) ? NULL : $sppb["HEADER"]["JML_CONT"]),
+        'NO_BC11' => (is_array($sppb["HEADER"]["NO_BC11"])) ? NULL : $sppb["HEADER"]["NO_BC11"],
+        'TGL_BC11' => (is_array($sppb["HEADER"]["TGL_BC11"])) ? NULL : date('Y-m-d', strtotime($sppb["HEADER"]["TGL_BC11"])),
         'NO_POS_BC11' => $sppb["HEADER"]["NO_POS_BC11"],
-        'NO_BL_AWB' => $sppb["HEADER"]["NO_BL_AWB"],
-        'TGL_BL_AWB' => date('Y-m-d', strtotime($sppb["HEADER"]["TGL_BL_AWB"])),
-        'NO_MASTER_BL_AWB' => $sppb["HEADER"]["NO_MASTER_BL_AWB"],
-        'TGL_MASTER_BL_AWB' => date('Y-m-d', strtotime($sppb["HEADER"]["TGL_MASTER_BL_AWB"])),
-        'FL_SEGEL' => $sppb["HEADER"]["FL_SEGEL"],
-        'JNS_KMS' => (is_array($sppb["DETIL"]["KMS"]["JNS_KMS"]) ? "" : $sppb["DETIL"]["KMS"]["JNS_KMS"]),
-        'JML_KMS' => $sppb["DETIL"]["KMS"]["JML_KMS"],
+        'NO_BL_AWB' => (is_array($sppb["HEADER"]["NO_BL_AWB"])) ? NULL : $sppb["HEADER"]["NO_BL_AWB"],
+        'TGL_BL_AWB' => (is_array($sppb["HEADER"]["TGL_BL_AWB"])) ? NULL : date('Y-m-d', strtotime($sppb["HEADER"]["TGL_BL_AWB"])),
+        'NO_MASTER_BL_AWB' => (is_array($sppb["HEADER"]["NO_MASTER_BL_AWB"])) ? NULL : $sppb["HEADER"]["NO_MASTER_BL_AWB"],
+        'TGL_MASTER_BL_AWB' => (is_array($sppb["HEADER"]["TGL_MASTER_BL_AWB"])) ? NULL : date('Y-m-d', strtotime($sppb["HEADER"]["TGL_MASTER_BL_AWB"])),
+        'FL_SEGEL' => (is_array($sppb["HEADER"]["FL_SEGEL"])) ? NULL : $sppb["HEADER"]["FL_SEGEL"],
+        'JNS_KMS' => NULL,
+        'JML_KMS' => NULL,
       ];
+
+      if(array_key_exists('DETIL', $sppb) 
+          && array_key_exists('KMS', $sppb["DETIL"]))
+      {
+        $data['JNS_KMS'] = (is_array($sppb["DETIL"]["KMS"]["JNS_KMS"]) ? NULL : $sppb["DETIL"]["KMS"]["JNS_KMS"]);
+        $data['JML_KMS'] = $sppb["DETIL"]["KMS"]["JML_KMS"];
+      }
 
       return $data;
     }
@@ -2179,6 +2704,7 @@ class SchedulerController extends Controller
     public function getDataManual(array $sppb)
     {
       $data = [
+        // 'CAR' => $sppb["HEADER"]["CAR"],
         'NO_SPPB' => $sppb["HEADER"]["NO_DOK_INOUT"],
         'TGL_SPPB' => date('Y-m-d', strtotime($sppb["HEADER"]["TGL_DOK_INOUT"])),
         'KD_KPBC' => $sppb["HEADER"]["KD_KANTOR"],
@@ -2187,11 +2713,11 @@ class SchedulerController extends Controller
         'NO_DAFTAR_PABEAN' => $sppb["HEADER"]["NO_DOK_INOUT"],
         'TGL_DAFTAR_PABEAN' => date('Y-m-d', strtotime($sppb["HEADER"]["TGL_DOK_INOUT"])),
         'NAMA_IMP' => $sppb["HEADER"]["CONSIGNEE"],
-        'NPWP_PPJK' => (is_array($sppb["HEADER"]["NPWP_PPJK"]) ? '' : $sppb["HEADER"]["NPWP_PPJK"]),
-        'NAMA_PPJK' => (is_array($sppb["HEADER"]["NM_PPJK"]) ? '' : $sppb["HEADER"]["NM_PPJK"]),
+        'NPWP_PPJK' => (is_array($sppb["HEADER"]["NPWP_PPJK"]) ? NULL : $sppb["HEADER"]["NPWP_PPJK"]),
+        'NAMA_PPJK' => (is_array($sppb["HEADER"]["NM_PPJK"]) ? NULL : $sppb["HEADER"]["NM_PPJK"]),
         'NM_ANGKUT' => $sppb["HEADER"]["NM_ANGKUT"],
         'NO_VOY_FLIGHT' => $sppb["HEADER"]["NO_VOY_FLIGHT"],
-        'JML_CONT' => (is_array($sppb["HEADER"]["JML_CONT"]) ? '' : $sppb["HEADER"]["JML_CONT"]),
+        'JML_CONT' => (is_array($sppb["HEADER"]["JML_CONT"]) ? NULL : $sppb["HEADER"]["JML_CONT"]),
         'NO_BC11' => $sppb["HEADER"]["NO_BC11"],
         'TGL_BC11' => date('Y-m-d', strtotime($sppb["HEADER"]["TGL_BC11"])),
         'NO_POS_BC11' => $sppb["HEADER"]["NO_POS_BC11"],
@@ -2202,7 +2728,7 @@ class SchedulerController extends Controller
       ];
 
       return $data;
-    }
+    }    
 
     public function getResults($service, $string)
     {
