@@ -235,26 +235,33 @@ class ManifestHousesController extends Controller
 
             $house->refresh();
 
-            if($request->UR_BRG != ''){
-              $hscode = HouseDetail::updateOrCreate([
-                'HouseID' => $house->id,
-                'HS_CODE' => '00000000'
-              ],[
-                'UR_BRG' => $request->UR_BRG
-              ]);
+            // if($request->UR_BRG != ''){
+            //   $hscode = HouseDetail::updateOrCreate([
+            //     'HouseID' => $house->id,
+            //     'HS_CODE' => '00000000'
+            //   ],[
+            //     'UR_BRG' => $request->UR_BRG
+            //   ]);
 
-              DB::commit();
+            //   DB::commit();
 
-              if($house->wasRecentlyCreated){
-                $hsinfo = 'Add HS Code '.$request->UR_BRG;
-              } else {
-                $hsinfo = 'Update HS Code to '.$request->UR_BRG;
-              }
+            //   if($house->wasRecentlyCreated){
+            //     $hsinfo = 'Add HS Code '.$request->UR_BRG;
+            //   } else {
+            //     $hsinfo = 'Update HS Code to '.$request->UR_BRG;
+            //   }
 
-              createLog('App\Models\HouseDetail', $hscode->id, $hsinfo);
+            //   createLog('App\Models\HouseDetail', $hscode->id, $hsinfo);
 
-              DB::commit();
-            }
+            //   DB::commit();
+            // }
+
+            $cif = $house->FREIGHT + $house->FOB + $house->ASURANSI;
+            $house->update([
+              'CIF' => $cif
+            ]);
+
+            DB::commit();
 
             if($request->ajax()){
               return response()->json(['status' => 'OK', 'house' => $house->NO_HOUSE_BLAWB]);
@@ -270,6 +277,40 @@ class ManifestHousesController extends Controller
             throw $th;
           }
         }
+    }
+
+    public function updateajax(Request $request)
+    {
+      $house = House::findOrFail($request->pk);
+      $column = $request->name ?? '';
+
+      if($column != '')
+      {
+        DB::beginTransaction();
+
+        try {
+          $house->update([
+            $column => $request->value
+          ]);
+
+          DB::commit();
+
+          return response()->json([
+            'status' => 'OK',
+            'message' => 'Update '.$column.' Success.',
+            'value' => $request->value
+          ]);
+        } catch (\Throwable $th) {
+          DB::rollback();
+          return response()->json([
+            'status' => 'ERROR',
+            'message' => $th->getMessage()
+          ]);
+          //throw $th;
+        }
+      }
+
+      
     }
     
     public function destroy(Request $request, House $house)
@@ -310,13 +351,6 @@ class ManifestHousesController extends Controller
 
     public function calculate(Request $request, House $house)
     {
-      $master = $house->master;
-      if(!$master->OriginWarehouse){
-        return response()->json([
-          'status' => 'ERROR',
-          'message' => 'Please Select Lini 1 Warehouse'
-        ]);
-      }
       if($request->show_estimate > 0
           || $request->show_actual > 0){
             
@@ -363,36 +397,38 @@ class ManifestHousesController extends Controller
         $vatTariff = $tariffs->where('is_vat', true)->first();
 
         $output .= '<tr>'
-                        .'<td colspan="4" class="text-right">'.$vatTariff->item.'</td>'
+                        .'<td colspan="4" class="text-right">'.($vatTariff?->item ?? 0).'</td>'
                         .'<td class="text-right">
-                          <b>'.number_format(round($vatTariff->total), 2, ',', '.').'</b></td>'
+                          <b>'.number_format(floor($vatTariff?->total ?? 0), 2, ',', '.').'</b></td>'
                         .'</tr>';
 
         $output .= '<tr>'
                     .'<td colspan="4" class="text-right"><b>TOTAL</b></td>'
-                    .'<td class="text-right"><b>'.number_format(($subTotal + (round($vatTariff->total))), 2, ',', '.').'</b></td>'
+                    .'<td class="text-right"><b>'.number_format(($subTotal + (floor($vatTariff->total ?? 0))), 2, ',', '.').'</b></td>'
                     .'</tr>';
 
       } else {
         $data = $request->validate([
           'cal_tariff' => 'required|numeric',
           'cal_days' => 'required|numeric',
+          'cal_out' => 'required|date_format:d-m-Y',
         ]);
   
         if($data){
-          $lini1 = $master->warehouseLine1;
-          $liniRate = $lini1->tariff ?? 0;
           $tariff = Tariff::with(['schema'])->findOrFail($data['cal_tariff']);
-          
+          $hasVat = $tariff->vat;
+          $vat = 0;
           $totalCharge = 0;
           $subTotal = 0;
           $days = $data['cal_days'];
+          $date = $data['cal_out'];
+          $tgl_keluar = Carbon::createFromFormat('d-m-Y', $date)->format('Y-m-d');
           $master = $house->master;
   
           $output = '';
   
           $charges = $tariff->schema->where('is_fixed', false)
-                                    ->where('column', 'ChargeableWeight')
+                                    ->where('is_storage', true)
                                     ->sortBy('urut');
           $others = $tariff->schema->whereNotIn('id', $charges->pluck('id')->toArray())
                                   ->sortBy('urut');
@@ -408,32 +444,40 @@ class ManifestHousesController extends Controller
                               ? $charge->days 
                               : ( ($days < 0) ? 0 : $days );
               $days -= $countDays;
+              // $countDays = $charge->days;
             } else {
               $countDays = ($days < 0) ? 0 : $days;
               $days -= $countDays;
+              // $countDays = $days;
             }
-            
-            $chargeRate = ($charge->rate > 0) ? $charge->rate : $liniRate;
-
-            ${'charge_'.$charge->id} = $chargeRate * ($house->$column ?? 0) * $countDays;
+            ${'charge_'.$charge->id} = $charge->rate * ($house->$column ?? 0) * $countDays;
   
             $output .= '<tr>'
                         .'<td>
                         <input type="hidden" name="is_vat[]" value="false">
+                        <input type="hidden" name="tgl_keluar[]" value="'.$tgl_keluar.'">
+                        <input type="hidden" name="charge_code[]" value="'.$charge->charge_code.'">
                         <input type="hidden" name="item[]" value="'.$charge->name.'">'
                         .$charge->name.'</td>'
                         .'<td><input type="hidden" name="days[]" value="'.$countDays.'">'
                         .$countDays.'</td>'
                         .'<td><input type="hidden" name="weight[]" value="'.$house->$column.'">'
                         .number_format(($house->$column ?? 0), 2, ',','.').'</td>'
-                        .'<td class="text-right"><input type="hidden" name="rate[]" value="'.$chargeRate.'">'.number_format($chargeRate, 2, ',','.').'</td>'                      
+                        .'<td class="text-right"><input type="hidden" name="rate[]" value="'.$charge->rate.'">'.number_format($charge->rate, 2, ',','.').'</td>'                      
                         .'<td class="text-right"><input type="hidden" name="total[]" value="'.${'charge_'.$charge->id}.'">'.number_format((${'charge_'.$charge->id} ?? 0), 2, ',','.').'</td>';
   
             $totalCharge += ${'charge_'.$charge->id};
+
+            if($hasVat) {
+              $vat += floor(${'charge_'.$charge->id} * ($tariff->vat / 100));
+            }
           }
           if($totalCharge < $tariff->minimum){
+            $cc = $charges->first()->charge_code;
             $output .= '<tr>
-                        <input type="hidden" name="is_vat[]" value="0">'
+                        <input type="hidden" name="is_vat[]" value="0">
+                        <input type="hidden" name="tgl_keluar[]" value="'.$tgl_keluar.'">
+                        <input type="hidden" name="charge_code[]" value="'.$cc.'">'
                       .'<td><input type="hidden" name="item[]" value="Minimum Charge">Minimum Charge</td>'
                       .'<td><input type="hidden" name="days[]" value=""></td>'
                       .'<td><input type="hidden" name="weight[]" value=""></td>'
@@ -442,11 +486,16 @@ class ManifestHousesController extends Controller
                       .'</tr>';
 
             $totalCharge = $tariff->minimum;
+
+            if($hasVat) {
+              $vat = floor($tariff->minimum * ($tariff->vat / 100));
+            }
           }
           
           $subTotal += $totalCharge;
   
           foreach ($others as $other ) {
+            $sw = '';
             if($other->is_fixed == true){
               ${'other_'.$other->id} = $other->rate;
             } else if($other->column == 'CDC'){
@@ -460,6 +509,7 @@ class ManifestHousesController extends Controller
             } else if($other->column == 'CHARGE'){
               ${'other_'.$other->id} = $other->rate * $totalCharge;
             } else {
+              $sw = $house->$column;
               $column = $other->column;
               ${'other_'.$other->id} = $other->rate * $house->$column;
             }
@@ -471,52 +521,54 @@ class ManifestHousesController extends Controller
             }
   
             $output .= '<tr>
-                          <input type="hidden" name="is_vat[]" value="0">'
+                          <input type="hidden" name="is_vat[]" value="0">
+                          <input type="hidden" name="tgl_keluar[]" value="'.$tgl_keluar.'">
+                          <input type="hidden" name="charge_code[]" value="'.$other->charge_code.'">'                          
                         .'<td><input type="hidden" name="item[]" value="'.$other->name.'">'
                         .$other->name.'</td>'
                         .'<td><input type="hidden" name="days[]" value=""></td>'                      
-                        .'<td><input type="hidden" name="weight[]" value=""></td>'
+                        .'<td><input type="hidden" name="weight[]" value="'.$sw.'">'.$sw.'</td>'
                         .'<td class="text-right"><input type="hidden" name="rate[]" value="'.$other->rate.'">'.$rateShow.'</td>'
                         .'<td class="text-right"><input type="hidden" name="total[]" value="'.${'other_'.$other->id}.'">'.number_format(${'other_'.$other->id}, 2, ',','.').'</td>'
                         .'</tr>';
   
             $subTotal += ${'other_'.$other->id};
+            if($hasVat) {
+              $vat += floor(${'other_'.$other->id} * ($tariff->vat / 100));
+            }
           }
   
           $output .= '<tr>'
                       .'<td colspan="4" class="text-right"><b>Sub Total</b></td>'
                       .'<td class="text-right"><b>'.number_format($subTotal, 2, ',', '.').'</b></td>'
                       .'</tr>';
-
-          $vat = 0;
           
           if($tariff->vat){
-            $vat = $subTotal * ($tariff->vat / 100);
+            // $vat = $subTotal * ($tariff->vat / 100);
             $output .= '<tr>'
-                        .'<td colspan="4" class="text-right">'
+                        .'<td colspan="4" class="text-right">
+                        <input type="hidden" name="charge_code[]" value="">'
                         .'<input type="hidden" name="is_vat[]" value="1">
+                        <input type="hidden" name="tgl_keluar[]" value="'.$tgl_keluar.'">
                           <input type="hidden" name="item[]" value="VAT '.($tariff->vat + 0).' %">VAT '.($tariff->vat + 0).' %</td>'
                         .'<input type="hidden" name="days[]" value="">
                           <input type="hidden" name="weight[]" value="">
                           <input type="hidden" name="rate[]" value="">'
                         .'<td class="text-right">
-                          <input type="hidden" name="total[]" value="'.round($vat).'"><b>'.number_format(round($vat), 2, ',', '.').'</b></td>'
+                          <input type="hidden" name="total[]" value="'.floor($vat).'"><b>'.number_format(floor($vat), 2, ',', '.').'</b></td>'
                         .'</tr>';
           }
   
           $output .= '<tr>'
                       .'<td colspan="4" class="text-right"><b>TOTAL</b></td>'
-                      .'<td class="text-right"><b>'.number_format(($subTotal + (round($vat) ?? 0)), 2, ',', '.').'</b></td>'
+                      .'<td class="text-right"><b>'.number_format(($subTotal + (floor($vat) ?? 0)), 2, ',', '.').'</b></td>'
                       .'</tr>';
           
         }        
       }
 
-      return response()->json([
-        'status' => 'OK',
-        'data' => $output
-      ]);
-      // echo $output;      
+      echo $output;
+      
     }
 
     public function storecalculate(Request $request, House $house)
@@ -541,12 +593,15 @@ class ManifestHousesController extends Controller
 
           foreach($request->item as $key => $value){
             $tariff = HouseTariff::updateOrCreate([
+              'master_id' => $house->MasterID,
               'house_id' => $house->id,
-              'item' => $value,
+              'urut' => ($key + 1),
               'is_estimate' => $request->is_estimate
             ],[              
-              'urut' => ($key + 1),
+              'item' => $value,
+              'charge_code' => $request->charge_code[$key],
               'days' => $request->days[$key],
+              'tgl_keluar' => $request->tgl_keluar[$key],
               'weight' => $request->weight[$key],
               'rate' => $request->rate[$key],
               'total' => $request->total[$key],
@@ -594,9 +649,15 @@ class ManifestHousesController extends Controller
         }
     }
 
-    public function label(House $house)
+    public function label(Request $request, House $house)
     {
       $house->load(['master']);
+
+      if($request->has('format') && $request->format == 'xml')
+      {
+        return $this->generateXML($house);
+      }
+
       $nobrg = $house->NO_BARANG;
 
       $pdf = PDF::setOption([
@@ -611,6 +672,245 @@ class ManifestHousesController extends Controller
       return $pdf->stream();
 
       // return view('exports.label', compact(['house']));
+    }
+
+    public function generateXML(House $house)
+    {
+      $branch = $house->branch;
+
+      $KD_GUDANG = $branch->CB_WhCode;
+      $NO_MASTER_BLAWB= str_replace(' ','',$house->NO_MASTER_BLAWB);
+      $TGL_MASTER_BLAWB = bc_date($house->TGL_MASTER_BLAWB);
+      $TGL_INVOICE = bc_date($house->TGL_INVOICE);
+      $TGL_BC11 = bc_date($house->TGL_BC11);
+      $NO_SUBPOS_BC11 = str_pad($house->NO_SUBPOS_BC11, 4, '0', STR_PAD_LEFT);
+      $TGL_HOUSE_BLAWB = bc_date($house->TGL_HOUSE_BLAWB);
+      $TGL_IZIN_PEMBERITAHU = bc_date($house->TGL_IZIN_PEMBERITAHU);
+      $NDPBM = $house->NDPBM;
+      $AL_PENGIRIM = (string)$house->AL_PENGIRIM;
+      $NO_IZIN_PJT = $house->pjt?->NO_IZIN_PJT ?? $house->NO_IZIN_PEMBERITAHU;
+      $TGL_IZIN_PJT = $house->pjt?->TGL_IZIN_PJT ?? $house->TGL_IZIN_PEMBERITAHU;
+
+      if($house->FOB > 0 && $house->FREIGHT > 0) {
+          $FOB_USD = $house->FOB;
+          $ASURANSI = $house->ASURANSI;
+          $FREIGHT = $house->FREIGHT;
+          $CIFHeader = $house->CIF;
+      } else {
+          $FOB_USD = $house->sum_cif_dtl;
+          $ASURANSI =0 ;
+          $FREIGHT = 0; 
+          $CIFHeader = $FOB_USD;
+      }  
+
+      $KATEGORI_BARANG_KIRIMAN = ($house->KATEGORI_BARANG_KIRIMAN > 0
+                                ? $house->KATEGORI_BARANG_KIRIMAN
+                                : 1);
+
+      $AL_PENERIMA = (string)substr($house->AL_PENERIMA,0,200);                       
+      $NPWP_BILLING = $house->JNS_ID_PENERIMA == 5?$house->NO_ID_PENERIMA:'000000000000000';
+      $NAMA_BILLING = $house->JNS_ID_PENERIMA == 5?$house->NM_PENERIMA:$house->NM_PEMBERITAHU;
+
+      $KD_GUDANG = ($house->BCF15_Status==="Yes"?"TPP":$KD_GUDANG);
+
+      if($house->BCF15_Status==="Yes"){
+          $NPWP_BILLING=$house->NO_ID_PEMBERITAHU;
+          $NAMA_BILLING = $house->NM_PEMBERITAHU;
+      }
+
+      $DATA = "<CN_PIBK>
+                <HEADER>
+                    <JNS_AJU>{$house->JNS_AJU}</JNS_AJU>
+                    <KD_JNS_PIBK>{$house->KD_JNS_PIBK}</KD_JNS_PIBK>
+                    <KATEGORI_BARANG_KIRIMAN>{$KATEGORI_BARANG_KIRIMAN}</KATEGORI_BARANG_KIRIMAN>
+                    <NO_BARANG>{$house->NO_HOUSE_BLAWB}</NO_BARANG>
+                    <KD_KANTOR>{$house->KD_KANTOR}</KD_KANTOR>
+                    <KD_JNS_ANGKUT>{$house->KD_JNS_ANGKUT}</KD_JNS_ANGKUT>
+                    <NM_PENGANGKUT>{$house->NM_PENGANGKUT}</NM_PENGANGKUT>
+                    <NO_FLIGHT>{$house->NO_FLIGHT}</NO_FLIGHT>
+                    <KD_PEL_MUAT>{$house->KD_PEL_MUAT}</KD_PEL_MUAT>
+                    <KD_PEL_BONGKAR>{$house->KD_PEL_BONGKAR}</KD_PEL_BONGKAR>
+                    <KD_GUDANG>".$KD_GUDANG."</KD_GUDANG>
+                    <NO_INVOICE>{$house->NO_INVOICE}</NO_INVOICE>
+                    <TGL_INVOICE>{$TGL_INVOICE}</TGL_INVOICE>
+                    <KD_NEGARA_ASAL>{$house->KD_NEGARA_ASAL}</KD_NEGARA_ASAL>
+                    <JML_BRG>{$house->JML_BRG}</JML_BRG>
+                    <NO_BC11>{$house->NO_BC11}</NO_BC11>
+                    <TGL_BC11>{$TGL_BC11}</TGL_BC11>
+                    <NO_POS_BC11>{$house->NO_POS_BC11}</NO_POS_BC11>
+                    <NO_SUBPOS_BC11>{$NO_SUBPOS_BC11}</NO_SUBPOS_BC11>
+                    <NO_SUBSUBPOS_BC11>{$house->NO_SUBSUBPOS_BC11}</NO_SUBSUBPOS_BC11>
+                    <NO_MASTER_BLAWB>{$NO_MASTER_BLAWB}</NO_MASTER_BLAWB>
+                    <TGL_MASTER_BLAWB>{$TGL_MASTER_BLAWB}</TGL_MASTER_BLAWB>
+                    <NO_HOUSE_BLAWB>{$house->NO_HOUSE_BLAWB}</NO_HOUSE_BLAWB>
+                    <TGL_HOUSE_BLAWB>{$TGL_HOUSE_BLAWB}</TGL_HOUSE_BLAWB>
+                    <KD_NEG_PENGIRIM>{$house->KD_NEG_PENGIRIM}</KD_NEG_PENGIRIM>
+                    <NM_PENGIRIM>{$house->NM_PENGIRIM}</NM_PENGIRIM>
+                    <AL_PENGIRIM>{$AL_PENGIRIM}</AL_PENGIRIM>
+                    <JNS_ID_PENGIRIM>5</JNS_ID_PENGIRIM>
+                    <NO_ID_PENGIRIM>000000000000000</NO_ID_PENGIRIM>
+                    <NO_ID_PPMSE></NO_ID_PPMSE>
+                    <NM_PPMSE></NM_PPMSE>
+
+                    <JNS_ID_PENERIMA>{$house->JNS_ID_PENERIMA}</JNS_ID_PENERIMA>
+                    <NO_ID_PENERIMA>{$house->NO_ID_PENERIMA}</NO_ID_PENERIMA>
+                    <NM_PENERIMA>{$house->NM_PENERIMA}</NM_PENERIMA>
+                    <AL_PENERIMA>{$AL_PENERIMA}</AL_PENERIMA>
+                    <TELP_PENERIMA>{$house->TELP_PENERIMA}</TELP_PENERIMA>
+                    <JNS_ID_PEMBERITAHU>5</JNS_ID_PEMBERITAHU>
+                    <NO_ID_PEMBERITAHU>{$house->NO_ID_PEMBERITAHU}</NO_ID_PEMBERITAHU>
+                    <NM_PEMBERITAHU>{$house->NM_PEMBERITAHU}</NM_PEMBERITAHU>
+                    <AL_PEMBERITAHU>{$house->AL_PEMBERITAHU}</AL_PEMBERITAHU>
+                    <NO_IZIN_PEMBERITAHU>".$NO_IZIN_PJT."</NO_IZIN_PEMBERITAHU>
+                    <TGL_IZIN_PEMBERITAHU>".bc_date($TGL_IZIN_PJT)."</TGL_IZIN_PEMBERITAHU>
+                    <KD_VAL>USD</KD_VAL>
+                    <NDPBM>{$house->NDPBM}</NDPBM>
+                    <FOB>".number_format($FOB_USD,2,'.','')."</FOB>
+                    <ASURANSI>".$ASURANSI."</ASURANSI>
+                    <FREIGHT>".$FREIGHT."</FREIGHT>
+                    <CIF>".number_format($CIFHeader,2,'.','')."</CIF>
+                    <NETTO>".number_format($house->BRUTO,2,'.','')."</NETTO>
+                    <BRUTO>".number_format($house->BRUTO,2,'.','')."</BRUTO>
+                    <TOT_DIBAYAR>".intval($house->HEstimatedBM+$house->HEstimatedPPH+$house->HEstimatedPPN+$house->HEstimatedBMTP)."</TOT_DIBAYAR>
+                      <NPWP_BILLING>{$NPWP_BILLING}</NPWP_BILLING>
+                    <NAMA_BILLING>{$NAMA_BILLING}</NAMA_BILLING>
+                    ";
+
+                    $DATA .= "<DETIL>";
+
+                    $TOTAL_BM = 0;
+                    $TOTAL_BMTP = 0;
+                    $TOTAL_PPN = 0;
+                    $TOTAL_PPH = 0;
+                    $TOTAL_PPNBM = 0;
+
+                    foreach($house->details as $keyd => $detail)
+                    {
+                      $SERI = $keyd + 1;
+
+                      $BM = $detail->BM_TRF * $detail->CIF_USD ;
+                      $BMTP = $detail->BMTP_TRF*$detail->JML_SAT_HRG ;
+                      $PPN = $detail->PPN_TRF * $detail->CIF_USD;
+                      $PPH = $detail->PPH_TRF * $detail->CIF_USD;
+                      $PPNBM = $detail->PPNBM_TRF * $detail->CIF_USD;
+
+                      $TOTAL_BM += $BM;
+                      $TOTAL_PPN += $PPN;
+                      $TOTAL_PPH += $PPH;
+                      $TOTAL_PPNBM += $PPNBM;
+                      $TOTAL_BMTP += $BMTP;
+
+                      $TGL_SKEP = '0000-00-00 00:00:00';
+
+                      $tglSkep = \Carbon\Carbon::parse($detail->TGL_SKEP);
+                      if($tglSkep->year > 1)
+                      {
+                        $TGL_SKEP = bc_date($detail->TGL_SKEP);
+                      }
+                      $NO_SKEP = ($detail->NO_SKEP);
+                      $FL_BEBAS = ($detail->FL_BEBAS);
+
+                      $DATA .= "
+                          <BARANG>
+                              <SERI_BRG>".$SERI."</SERI_BRG>
+                              <HS_CODE>".$detail->HS_CODE."</HS_CODE>
+                              <UR_BRG>".$detail->UR_BRG."</UR_BRG>
+                              <IMEI1>".$detail->IMEI1."</IMEI1>
+                              <IMEI2>".$detail->IMEI2."</IMEI2>
+                              <KD_NEG_ASAL>".$house->KD_NEGARA_ASAL."</KD_NEG_ASAL>
+                              <JML_KMS>".$house->JML_BRG."</JML_KMS>
+                              <JNS_KMS>".$house->JNS_KMS."</JNS_KMS>
+                              <CIF>".(float)$detail->CIF_USD."</CIF>
+                              <KD_SAT_HRG>".$detail->KD_SAT_HRG."</KD_SAT_HRG>
+                              <JML_SAT_HRG>".$detail->JML_SAT_HRG."</JML_SAT_HRG>
+                              <FL_BEBAS>".$FL_BEBAS."</FL_BEBAS>
+                              <NO_SKEP>".$NO_SKEP."</NO_SKEP>
+                              <TGL_SKEP>".$TGL_SKEP."</TGL_SKEP>
+                              <DETIL_PUNGUTAN>
+                                  <KD_PUNGUTAN>1</KD_PUNGUTAN>
+                                  <NILAI>".number_format(($detail->BEstimatedBM ?? 0),2,'.','')."</NILAI>
+                                  <JNS_TARIF>1</JNS_TARIF>
+                                  <KD_TARIF>1</KD_TARIF>
+                                  <KD_SAT_TARIF>1</KD_SAT_TARIF>
+                                  <JML_SAT></JML_SAT>
+                                  <TARIF>".number_format(($detail->BM_TRF ?? 0),2,'.','')."</TARIF>
+                              </DETIL_PUNGUTAN>
+                              <DETIL_PUNGUTAN>
+                                  <KD_PUNGUTAN>2</KD_PUNGUTAN>
+                                  <NILAI>".number_format(($detail->BEstimatedPPH ?? 0),2,'.','')."</NILAI>
+                                  <JNS_TARIF>1</JNS_TARIF>
+                                  <KD_TARIF>1</KD_TARIF>
+                                  <KD_SAT_TARIF>1</KD_SAT_TARIF>
+                                  <JML_SAT></JML_SAT>
+                                  <TARIF>".number_format(($detail->PPH_TRF ?? 0),2,'.','')."</TARIF>
+                              </DETIL_PUNGUTAN>
+                              <DETIL_PUNGUTAN>
+                                  <KD_PUNGUTAN>3</KD_PUNGUTAN>
+                                  <NILAI>".number_format(($detail->BEstimatedPPN ?? 0),2,'.','')."</NILAI>
+                                  <JNS_TARIF>1</JNS_TARIF>
+                                  <KD_TARIF>1</KD_TARIF>
+                                  <KD_SAT_TARIF>1</KD_SAT_TARIF>
+                                  <JML_SAT></JML_SAT>
+                                  <TARIF>".number_format(($detail->PPN_TRF ?? 0),2,'.','')."</TARIF>
+                              </DETIL_PUNGUTAN>
+                              <DETIL_PUNGUTAN>
+                                  <KD_PUNGUTAN>4</KD_PUNGUTAN>
+                                  <NILAI>".number_format(($PPNBM ?? 0),2,'.','')."</NILAI>
+                                  <JNS_TARIF>1</JNS_TARIF>
+                                  <KD_TARIF>1</KD_TARIF>
+                                  <KD_SAT_TARIF>1</KD_SAT_TARIF>
+                                  <JML_SAT></JML_SAT>
+                                  <TARIF>".number_format(($detail->PPNBM_TRF ?? 0),2,'.','')."</TARIF>
+                              </DETIL_PUNGUTAN>
+                              <DETIL_PUNGUTAN>
+                                  <KD_PUNGUTAN>9</KD_PUNGUTAN>
+                                  <NILAI>".number_format(($BMTP ?? 0),2,'.','')."</NILAI>
+                                  <JNS_TARIF>1</JNS_TARIF>
+                                  <KD_TARIF>2</KD_TARIF>
+                                  <KD_SAT_TARIF>".$detail->KD_SAT_HRG."</KD_SAT_TARIF>
+                                  <JML_SAT>".$detail->JML_SAT_HRG."</JML_SAT>
+                                  <TARIF>".number_format(($detail->BMTP_TRF ?? 0),2,'.','')."</TARIF>
+                              </DETIL_PUNGUTAN>
+                          </BARANG>
+                          ";
+                    }
+                    $DATA .= "</DETIL>";
+                    
+                  $PUNGUTAN = "<HEADER_PUNGUTAN>
+                        <PUNGUTAN_TOTAL>
+                            <KD_PUNGUTAN>1</KD_PUNGUTAN>
+                            <NILAI>".intval($house->HEstimatedBM)."</NILAI>
+                        </PUNGUTAN_TOTAL>
+                        <PUNGUTAN_TOTAL>
+                            <KD_PUNGUTAN>2</KD_PUNGUTAN>
+                            <NILAI>".intval($house->HEstimatedPPH)."</NILAI>
+                        </PUNGUTAN_TOTAL>
+                        <PUNGUTAN_TOTAL>
+                            <KD_PUNGUTAN>3</KD_PUNGUTAN>
+                            <NILAI>".intval($house->HEstimatedPPN)."</NILAI>
+                        </PUNGUTAN_TOTAL>
+                        <PUNGUTAN_TOTAL>
+                            <KD_PUNGUTAN>4</KD_PUNGUTAN>
+                            <NILAI>".intval($TOTAL_PPNBM)."</NILAI>
+                        </PUNGUTAN_TOTAL>
+                          <PUNGUTAN_TOTAL>
+                            <KD_PUNGUTAN>9</KD_PUNGUTAN>
+                            <NILAI>".intval($house->HEstimatedBMTP)."</NILAI>
+                        </PUNGUTAN_TOTAL>
+                    </HEADER_PUNGUTAN>";
+
+                      $DATA .= $PUNGUTAN."
+                </HEADER>
+            </CN_PIBK>
+            ";
+
+      $DATA = str_replace('&','',$DATA);
+
+      $fileName = $house->NO_BARANG . '-'.date('Ymd'). '.xml';
+
+      \Storage::disk('public')->put('/file/xml/'.$fileName, $DATA); 
+
+      return \Storage::disk('public')->download('/file/xml/'.$fileName);
     }
 
     public function validatedHouse()

@@ -308,7 +308,7 @@ class ManifestHouseDetailsController extends Controller
           $HTotalPPH = 0;
           $HTotalBM = 0;
           $HTotalBMTP = 0;
-          $totalCIF = 0;
+          // $totalCIF = 0;
 
         foreach($house->details as $detail)
         {
@@ -338,7 +338,7 @@ class ManifestHouseDetailsController extends Controller
           $HTotalPPH += $PPH;
           $HTotalBM += $BM;
           $HTotalBMTP += $BMTP;
-          $totalCIF += $CIF;
+          // $totalCIF += $CIF;
         }
 
         DB::commit();
@@ -348,7 +348,7 @@ class ManifestHouseDetailsController extends Controller
           'HEstimatedBM'   => roundUp($HTotalBM,1000),
           'HEstimatedPPH'  => floor($HTotalPPH),
           'HEstimatedBMTP'  => roundUp($HTotalBMTP,1000),
-          'CIF' => $totalCIF
+          // 'CIF' => $totalCIF
         ]);
 
         DB::commit();
