@@ -151,6 +151,10 @@ Route::group(['middleware' => 'auth'], function(){
   Route::get('/profile', 'AuthController@profile')->name('profile'); // Profile
   Route::put('/profile/{user}', 'AuthController@update')->name('profile.update'); // Profile
 
+  Route::get('/active-company', 'AdminCompaniesUsersController@select')
+        ->name('active-company.select');
+  Route::post('/active-company', 'AdminCompaniesUsersController@set')
+        ->name('active-company.set');
   Route::get('/global-search', 'DashboardController@search')
        ->name('global.search');
   Route::get('/global-download', 'DownloadController@download')
